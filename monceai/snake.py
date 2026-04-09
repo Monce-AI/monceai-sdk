@@ -26,6 +26,12 @@ import requests
 
 DEFAULT_ENDPOINT = "https://snakebatch.aws.monce.ai"
 
+MODES = {
+    "fast":     {"n_layers": 25,  "bucket": 16},
+    "balanced": {"n_layers": 50,  "bucket": 32},
+    "heavy":    {"n_layers": 100, "bucket": 64},
+}
+
 
 def _get_api_key():
     key = os.environ.get("SNAKE_API_KEY")
@@ -45,10 +51,10 @@ class Snake:
         Snake("model.json")                 — load local file, upload to cloud
     """
 
-    def __init__(self, Knowledge=None, target_index=0, n_layers=5, bucket=32,
+    def __init__(self, Knowledge=None, target_index=0, n_layers=None, bucket=250,
                  noise=0.25, oppose_profile="auto", model_id=None,
                  endpoint=None, api_key=None, max_lambdas=None, timeout=120,
-                 budget_ms=2100):
+                 budget_ms=2100, mode="fast"):
 
         self.endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
         self.api_key = api_key or _get_api_key()
@@ -61,6 +67,13 @@ class Snake:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         self._session.headers.update(headers)
+
+        # Resolve n_layers and bucket: explicit > mode > default
+        mode_cfg = MODES.get(mode, MODES["fast"])
+        if n_layers is None:
+            n_layers = mode_cfg["n_layers"]
+        if bucket == 250:  # default sentinel — override with mode
+            bucket = mode_cfg["bucket"]
 
         # Connect to existing model by model_id kwarg
         if Knowledge is None and model_id:
@@ -186,6 +199,13 @@ class Snake:
         """Training time breakdown: preprocess_ms, chain_build_ms, bucket_fan_out_ms, merge_s3_ms."""
         if self.training_info:
             return self.training_info.get("breakdown")
+        return None
+
+    @property
+    def log(self):
+        """Server-side training log."""
+        if self.training_info:
+            return self.training_info.get("log")
         return None
 
     # ------------------------------------------------------------------
@@ -346,6 +366,34 @@ class Snake:
         """
         return self._post("/warmup", {"workers": workers})
 
+    @classmethod
+    def warmup_all(cls, scorers=5, endpoint=None, api_key=None):
+        """
+        Warm all Lambda functions: API, orchestrator, inference, and scorers.
+        Call once at startup to eliminate cold starts on first train/predict.
+
+        Args:
+            scorers: number of scorer containers to warm (default 5)
+            endpoint: API endpoint (default from env)
+            api_key: API key (default from env)
+
+        Returns:
+            dict with per-function warm status and wall_clock_ms
+        """
+        ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+        key = api_key or _get_api_key()
+        headers = {"Content-Type": "application/json"}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        resp = requests.post(
+            f"{ep}/warmup-all",
+            json={"scorers": scorers},
+            headers=headers,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     # ------------------------------------------------------------------
     # Model management
     # ------------------------------------------------------------------
@@ -433,8 +481,12 @@ class Snake:
         return resp.json()
 
     def __repr__(self):
-        ms = f", {self.wall_clock_ms}ms" if self.wall_clock_ms else ""
-        return f"Snake(model_id='{self.model_id}'{ms})"
+        parts = [f"model_id='{self.model_id}'"]
+        if self.wall_clock_ms:
+            parts.append(f"{self.wall_clock_ms}ms")
+        if self.log:
+            parts.append(f"log='{self.log}'")
+        return f"Snake({', '.join(parts)})"
 
 
 class RankResult:
