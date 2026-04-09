@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "monceai"
+version = "0.1.0"
+description = "Monce AI SDK — Cloud Snake classifier"
+requires-python = ">=3.9"
+license = "LicenseRef-Proprietary"
+authors = [{name = "Charles Dana", email = "charles@monce.ai"}]
+dependencies = ["requests>=2.28"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["monceai"]
