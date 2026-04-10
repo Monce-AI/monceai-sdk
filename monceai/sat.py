@@ -153,7 +153,8 @@ class SATResult:
 
 
 def SAT(input, budget: float = 60.0, vocal: bool = False,
-        mode: str = "cloud", endpoint: str | None = None,
+        mode: str = "cloud", solve_mode: str = "haiku",
+        endpoint: str | None = None,
         api_key: str | None = None,
         budget_dollars: float = 1.0) -> SATResult:
     """Solve a SAT instance within a time budget.
@@ -164,6 +165,11 @@ def SAT(input, budget: float = 60.0, vocal: bool = False,
         budget: time budget in seconds (default 60s). Hard ceiling.
         vocal: print progress to stdout.
         mode: "cloud" (npdollars backend) or "local" (LogicSpace + Kissat).
+        solve_mode: worker budget tier for cloud mode.
+            "haiku"  — O(n×m²) atom per worker. Fast, cheap.
+            "sonnet" — O(n×m⁴) atom. Thorough.
+            "opus"   — O(n²×m⁴) atom. Heavy.
+            "mythos" — O(n²×m⁸) atom. Will terminate. The bill won't.
         endpoint: API URL override.
         api_key: Bearer token. Defaults to SAT_API_KEY env var.
         budget_dollars: dollar budget for cloud mode (default $1.00).
@@ -176,12 +182,14 @@ def SAT(input, budget: float = 60.0, vocal: bool = False,
     """
     if mode == "local":
         return _local_solve(input, budget, vocal)
-    return _cloud_solve(input, budget, vocal, endpoint, api_key, budget_dollars)
+    return _cloud_solve(input, budget, vocal, endpoint, api_key,
+                        budget_dollars, solve_mode)
 
 
 def _cloud_solve(input, budget: float, vocal: bool,
                  endpoint: str | None, api_key: str | None,
-                 budget_dollars: float) -> SATResult:
+                 budget_dollars: float,
+                 solve_mode: str = "haiku") -> SATResult:
     """Cloud solve: POST to npdollars swarm backend."""
     t_start = time.perf_counter()
     ep = (endpoint or os.environ.get("SAT_ENDPOINT", DEFAULT_ENDPOINT)).rstrip("/")
@@ -205,6 +213,7 @@ def _cloud_solve(input, budget: float, vocal: bool,
                 "dimacs": dimacs_str,
                 "budget": budget,
                 "budget_dollars": budget_dollars,
+                "mode": solve_mode,
                 "sync": True,
             },
             headers=headers,
