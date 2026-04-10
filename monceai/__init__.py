@@ -10,5 +10,5 @@ Modules:
 __version__ = "0.2.0"
 
 from .snake import Snake
-from .sat import SAT
+from .sat import SAT, SATSession, SATResult, SATProof
 from .report import generate_report
