@@ -153,38 +153,53 @@ class SATResult:
 
 
 def SAT(input, budget: float = 60.0, vocal: bool = False,
-        mode: str = "cloud", solve_mode: str = "haiku",
+        mode: str = "local", solve_mode: str = "haiku",
         endpoint: str | None = None,
         api_key: str | None = None,
-        budget_dollars: float = 1.0) -> SATResult:
+        budget_dollars: float = 1.0) -> "SATSession":
     """Solve a SAT instance within a time budget.
+
+    Returns a SATSession — a live object with the dictionary,
+    learned clauses, backbones, and full LogicSpace state.
+    The result is on .result. If TIMEOUT, resume with more budget:
+
+        s = SAT("problem.cnf", budget=10)
+        s.result          # "SAT" | "UNSAT" | "TIMEOUT"
+        s.D               # the dictionary — all learned knowledge
+        s.backbones       # forced literals
+        s.tension         # |backbones| / n_vars
+        s.entry_histogram()
+
+        # TIMEOUT? Keep going:
+        s.swarm(budget=30)
+        s.prove(budget=10)
+        s.solve(budget=5)
 
     Args:
         input: DIMACS file path, DIMACS string, raw bytes, or any object
                with a .to_dimacs() method.
         budget: time budget in seconds (default 60s). Hard ceiling.
         vocal: print progress to stdout.
-        mode: "cloud" (npdollars backend) or "local" (LogicSpace + Kissat).
+        mode: "local" (LogicSpace + Kissat) or "cloud" (npdollars backend).
         solve_mode: worker budget tier for cloud mode.
-            "haiku"  — O(n×m²) atom per worker. Fast, cheap.
-            "sonnet" — O(n×m⁴) atom. Thorough.
-            "opus"   — O(n²×m⁴) atom. Heavy.
-            "mythos" — O(n²×m⁸) atom. Will terminate. The bill won't.
         endpoint: API URL override.
         api_key: Bearer token. Defaults to SAT_API_KEY env var.
         budget_dollars: dollar budget for cloud mode (default $1.00).
 
     Returns:
-        SATResult with:
-        - If SAT: .assignment = exhibited solution (signed int list)
-        - If UNSAT: .proof = LogicSpace proof (backbones, tension, method)
-        - Always: .equation, .rounds, .round_reports, .cost, .total_ms
+        SATSession with .result (SATResult), .D (Dictionary), .backbones, etc.
     """
-    if mode == "local":
+    if mode == "cloud":
+        # Cloud mode: one-shot, wraps response in a session shell
+        result = _cloud_solve(input, budget, vocal, endpoint, api_key,
+                              budget_dollars, solve_mode)
         session = SATSession(input)
-        return session.swarm(budget=budget, vocal=vocal)
-    return _cloud_solve(input, budget, vocal, endpoint, api_key,
-                        budget_dollars, solve_mode)
+        session.result = result
+        return session
+
+    session = SATSession(input)
+    session.swarm(budget=budget, vocal=vocal)
+    return session
 
 
 def _cloud_solve(input, budget: float, vocal: bool,
