@@ -54,13 +54,14 @@ class Snake:
     def __init__(self, Knowledge=None, target_index=0, n_layers=None, bucket=250,
                  noise=0.25, oppose_profile="auto", model_id=None,
                  endpoint=None, api_key=None, max_lambdas=None, timeout=120,
-                 budget_ms=2100, mode="fast"):
+                 budget_ms=2100, mode="fast", version="v4"):
 
         self.endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
         self.api_key = api_key or _get_api_key()
         self.model_id = model_id
         self.timeout = timeout
         self.budget_ms = budget_ms
+        self.version = version  # "v3" or "v4"
         self.training_info = None
         self._session = requests.Session()
         headers = {"Content-Type": "application/json"}
@@ -149,7 +150,12 @@ class Snake:
         if server_budget:
             body["budget_ms"] = server_budget
 
-        resp = self._post("/train", body)
+        if self.version == "v4":
+            # v4: EC2 coordinator → tree-node Lambdas (no chain)
+            v4_body = {"data": data, "config": config}
+            resp = self._post("/v4/train", v4_body)
+        else:
+            resp = self._post("/train", body)
 
         self.model_id = resp["model_id"]
 
@@ -297,7 +303,10 @@ class Snake:
         if server_budget:
             body["budget_ms"] = server_budget
 
-        resp = self._post(f"/batch/{self.model_id}", body)
+        if self.version == "v4":
+            resp = self._post(f"/v4/batch/{self.model_id}", {"items": items, "mode": mode, "budget_ms": server_budget or 5000})
+        else:
+            resp = self._post(f"/batch/{self.model_id}", body)
         return resp
 
     def get_batch_rank(self, items, target_class, top=100, budget_ms=5000,
