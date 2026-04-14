@@ -54,14 +54,14 @@ class Snake:
     def __init__(self, Knowledge=None, target_index=0, n_layers=None, bucket=250,
                  noise=0.25, oppose_profile="auto", model_id=None,
                  endpoint=None, api_key=None, max_lambdas=None, timeout=120,
-                 budget_ms=2100, mode="fast", version="v5"):
+                 budget_ms=2100, mode="fast", version="v6"):
 
         self.endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
         self.api_key = api_key or _get_api_key()
         self.model_id = model_id
         self.timeout = timeout
         self.budget_ms = budget_ms
-        self.version = version  # "v3", "v4", or "v5"
+        self.version = version  # "v3", "v4", "v5", or "v6"
         self.training_info = None
         self._session = requests.Session()
         headers = {"Content-Type": "application/json"}
@@ -150,7 +150,11 @@ class Snake:
         if server_budget:
             body["budget_ms"] = server_budget
 
-        if self.version == "v5":
+        if self.version == "v6":
+            # v6: binary divide and conquer — recursive v6-worker Lambdas
+            v6_body = {"data": data, "config": config}
+            resp = self._post("/v6/train", v6_body)
+        elif self.version == "v5":
             # v5: conductor Lambda — streaming uphill provision
             v5_body = {"data": data, "config": config}
             resp = self._post("/v5/train", v5_body)
@@ -307,7 +311,9 @@ class Snake:
         if server_budget:
             body["budget_ms"] = server_budget
 
-        if self.version == "v5":
+        if self.version == "v6":
+            resp = self._post(f"/v6/batch/{self.model_id}", {"items": items, "mode": mode, "budget_ms": server_budget or 5000})
+        elif self.version == "v5":
             resp = self._post(f"/v5/batch/{self.model_id}", {"items": items, "mode": mode, "budget_ms": server_budget or 5000})
         elif self.version == "v4":
             resp = self._post(f"/v4/batch/{self.model_id}", {"items": items, "mode": mode, "budget_ms": server_budget or 5000})
