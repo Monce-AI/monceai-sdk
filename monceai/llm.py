@@ -597,6 +597,24 @@ def VLM(prompt: str, image: bytes, model: str = "charles-json",
 CONCIERGE_ENDPOINT = "https://concierge.aws.monce.ai"
 
 
+def _concierge_api(path: str, payload: dict, endpoint: str = None, timeout: int = 30):
+    url = f"{(endpoint or CONCIERGE_ENDPOINT).rstrip('/')}{path}"
+    try:
+        r = requests.post(url, json=payload, timeout=timeout)
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
+def _concierge_get(path: str, params: dict = None, endpoint: str = None, timeout: int = 15):
+    url = f"{(endpoint or CONCIERGE_ENDPOINT).rstrip('/')}{path}"
+    try:
+        r = requests.get(url, params=params or {}, timeout=timeout)
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
 def _concierge_chat(text: str, endpoint: str = None, timeout: int = 120) -> LLMResult:
     url = f"{(endpoint or CONCIERGE_ENDPOINT).rstrip('/')}/chat"
     t = time.time()
@@ -625,17 +643,23 @@ def _concierge_chat(text: str, endpoint: str = None, timeout: int = 120) -> LLMR
 
 class Concierge(str):
     """
-    Memory + intelligence + Snake tools. Sonnet-powered.
+    Monce knowledge base. Memory + intelligence + Snake tools.
 
-        # With text → blocks, returns str
+        # Ask → blocks, returns str
         Concierge("what's the accuracy for VIP today?")
-        Concierge("add synonym PLANILUX 4MM → 60442C for VIT")
 
-        # Without text → reusable client, fires parallel futures
+        # Teach → remembers, then answers with context
+        Concierge("VIP uses warm edge TPS noir 16mm as default spacer")
+
+        # Search / Remember / Forget
+        Concierge.remember("44.2 rTherm is the standard for Riou")
+        Concierge.search("rTherm")
+        Concierge.forget("old pricing info")
+
+        # Client mode → parallel futures
         c = Concierge()
         a = c("standup report")
-        b = c("synonym recommendations")
-        print(a)  # blocks on first read
+        print(a)
     """
 
     def __new__(cls, prompt: str = None, endpoint: str = None, timeout: int = 120):
@@ -651,6 +675,58 @@ class Concierge(str):
         instance.result = r
         _report_usage(DEFAULT_ENDPOINT, prompt, r)
         return instance
+
+    @staticmethod
+    def remember(text: str, source: str = "sdk", tags: list = None,
+                 endpoint: str = None) -> bool:
+        result = _concierge_api("/remember",
+            {"text": text, "source": source, "tags": tags or ["sdk"]},
+            endpoint=endpoint)
+        return bool(result and result.get("remembered"))
+
+    @staticmethod
+    def search(query: str, limit: int = 20, endpoint: str = None) -> list:
+        result = _concierge_get("/search",
+            {"q": query, "limit": limit}, endpoint=endpoint)
+        if not result:
+            return []
+        return [m.get("text", "") for m in result.get("memories", [])]
+
+    @staticmethod
+    def forget(query: str, endpoint: str = None) -> int:
+        result = _concierge_api("/forget", {"query": query}, endpoint=endpoint)
+        return result.get("forgotten", 0) if result else 0
+
+    @staticmethod
+    def memories(limit: int = 50, tag: str = None, endpoint: str = None) -> list:
+        params = {"limit": limit}
+        if tag:
+            params["tag"] = tag
+        result = _concierge_get("/memories", params, endpoint=endpoint)
+        if not result:
+            return []
+        return [m.get("text", "") for m in result.get("memories", [])]
+
+    @staticmethod
+    def digest(endpoint: str = None) -> list:
+        result = _concierge_get("/digest", endpoint=endpoint)
+        if not result:
+            return []
+        return result.get("entries", [])
+
+    @staticmethod
+    def kpi(days: int = 1, factory_id: int = None, endpoint: str = None) -> dict:
+        params = {"days": days}
+        if factory_id:
+            params["factory_id"] = factory_id
+        return _concierge_get("/kpi", params, endpoint=endpoint) or {}
+
+    @staticmethod
+    def intelligence(endpoint: str = None) -> list:
+        result = _concierge_get("/intelligence", endpoint=endpoint)
+        if not result:
+            return []
+        return result.get("entries", [])
 
 
 class _ConciergeFuture:
@@ -695,6 +771,15 @@ class _ConciergeClient:
     def __call__(self, prompt, **kw):
         return _ConciergeFuture(prompt, self._endpoint,
                                 kw.get("timeout", self._timeout))
+
+    def remember(self, text, **kw):
+        return Concierge.remember(text, endpoint=self._endpoint, **kw)
+
+    def search(self, query, **kw):
+        return Concierge.search(query, endpoint=self._endpoint, **kw)
+
+    def forget(self, query, **kw):
+        return Concierge.forget(query, endpoint=self._endpoint, **kw)
 
     def __repr__(self):
         return f'Concierge(endpoint={self._endpoint!r})'
