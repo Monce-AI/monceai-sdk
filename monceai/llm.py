@@ -87,6 +87,7 @@ MODELS = {
     "nova-pro":          "eu.amazon.nova-pro-v1:0",
     "nova-lite":         "eu.amazon.nova-lite-v1:0",
     "nova-micro":        "eu.amazon.nova-micro-v1:0",
+    "moncey":            "moncey",
 }
 
 
@@ -461,6 +462,82 @@ class Charles:
     @staticmethod
     def vlm(prompt, image, **kw):
         return Charles(prompt, image=image, **kw)
+
+
+class Moncey:
+    """
+    Glass industry sales agent. Lazy — fires on construction, resolves on read.
+
+        from monceai import Moncey
+
+        Moncey("devis 44.2 feuillete LowE argon 16mm")
+        # → "Bonjour, j'ai identifié: Feuilleté 44.2 + Intercalaire 16mm + Argon..."
+
+        Moncey("relance client Dupont pour la commande 1234")
+        # → professional follow-up in French
+
+        # It's a string
+        print(Moncey("réclamation casse sur livraison"))
+
+        # Metadata
+        m = Moncey("devis 10 vitrages")
+        m.result.sat_memory["snake_comprendre"]  # glass decomposition
+        m.result.sat_memory["comprendre"]         # 10 classifiers
+    """
+
+    def __init__(self, prompt: str, factory_id: int = 3,
+                 endpoint: str = None, timeout: int = 30):
+        import threading
+        self._prompt = prompt
+        self._endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+        self._factory_id = factory_id
+        self._result = None
+        self._text = None
+        self._done = threading.Event()
+
+        def _compute():
+            r = _chat(text=prompt, model="moncey", factory_id=factory_id,
+                       endpoint=self._endpoint, timeout=timeout)
+            self._result = r
+            self._text = r.text
+            self._done.set()
+            _report_usage(self._endpoint, prompt, r)
+
+        threading.Thread(target=_compute, daemon=True).start()
+
+    def _resolve(self):
+        self._done.wait()
+
+    @property
+    def result(self) -> LLMResult:
+        self._resolve()
+        return self._result
+
+    def __str__(self):
+        self._resolve()
+        return self._text
+
+    def __repr__(self):
+        if self._done.is_set():
+            preview = (self._text or "")[:60].replace("\n", " ")
+            return f'Moncey({self._prompt!r}) → {preview!r}'
+        return f'Moncey({self._prompt!r}) → [computing...]'
+
+    def __format__(self, spec):
+        return format(str(self), spec)
+
+    def __add__(self, other):
+        return str(self) + other
+
+    def __radd__(self, other):
+        return other + str(self)
+
+    def __len__(self):
+        return len(str(self))
+
+    def __bool__(self):
+        self._resolve()
+        return bool(self._text)
 
 
 def VLM(prompt: str, image: bytes, model: str = "charles-json",
