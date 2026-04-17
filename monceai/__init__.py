@@ -16,5 +16,5 @@ __version__ = "0.3.0"
 
 from .snake import Snake
 from .sat import SAT, SATSession, SATResult, SATProof
-from .llm import LLM, VLM, Charles, Moncey, LLMSession, LLMResult
+from .llm import LLM, VLM, Charles, Moncey, Json, LLMSession, LLMResult
 from .report import generate_report

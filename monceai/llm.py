@@ -540,6 +540,132 @@ class Moncey:
         return bool(self._text)
 
 
+class Json(dict):
+    """
+    Dump anything to valid JSON. Lazy — fires on construction, resolves on read.
+
+        from monceai import Json
+
+        Json("list the first 5 prime numbers")
+        # → {"primes": [2, 3, 5, 7, 11]}
+
+        Json('{"name": "Charles, "age": 26}')  # broken JSON → fixed
+        # → {"name": "Charles", "age": 26}
+
+        Json("nom: Charles, age: 26, ville: Paris")  # text → JSON
+        # → {"nom": "Charles", "age": 26, "ville": "Paris"}
+
+        Json("translate to json: 3 apples at 2 euros each")
+        # → {"items": [{"name": "apples", "quantity": 3, "price": 2}]}
+
+        # It's a dict
+        j = Json("list 3 colors")
+        j["colors"]           # ["red", "green", "blue"]
+        j.get("colors", [])   # works
+        len(j)                # number of keys
+
+        # Raw text
+        j.text                # raw JSON string
+        j.result              # full LLMResult
+    """
+
+    def __new__(cls, prompt: str = "", factory_id: int = 0,
+                endpoint: str = None, timeout: int = 30):
+        instance = super().__new__(cls)
+        return instance
+
+    def __init__(self, prompt: str = "", factory_id: int = 0,
+                 endpoint: str = None, timeout: int = 30):
+        super().__init__()
+        import threading
+        self._prompt = prompt
+        self._endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+        self._result = None
+        self._text = None
+        self._done = threading.Event()
+
+        if not prompt:
+            self._text = "{}"
+            self._result = LLMResult()
+            self._done.set()
+            return
+
+        def _compute():
+            r = _chat(text=prompt, model="charles-json", factory_id=factory_id,
+                       endpoint=self._endpoint, timeout=timeout)
+            self._result = r
+            self._text = r.text
+            # Parse into self (dict)
+            try:
+                parsed = _json.loads(r.text)
+                if isinstance(parsed, dict):
+                    self.update(parsed)
+                elif isinstance(parsed, list):
+                    self.update({"data": parsed})
+                else:
+                    self.update({"value": parsed})
+            except (ValueError, TypeError):
+                self.update({"raw": r.text})
+            self._done.set()
+            _report_usage(self._endpoint, prompt, r)
+
+        threading.Thread(target=_compute, daemon=True).start()
+
+    def _resolve(self):
+        self._done.wait()
+
+    @property
+    def result(self) -> LLMResult:
+        self._resolve()
+        return self._result
+
+    @property
+    def text(self) -> str:
+        self._resolve()
+        return self._text
+
+    def __repr__(self):
+        if self._done.is_set():
+            return f'Json({dict(self)})'
+        return f'Json({self._prompt!r}) → [computing...]'
+
+    def __str__(self):
+        self._resolve()
+        return _json.dumps(dict(self), ensure_ascii=False, indent=2)
+
+    def __getitem__(self, key):
+        self._resolve()
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        self._resolve()
+        return super().__contains__(key)
+
+    def __len__(self):
+        self._resolve()
+        return super().__len__()
+
+    def __bool__(self):
+        self._resolve()
+        return super().__len__() > 0
+
+    def get(self, key, default=None):
+        self._resolve()
+        return super().get(key, default)
+
+    def keys(self):
+        self._resolve()
+        return super().keys()
+
+    def values(self):
+        self._resolve()
+        return super().values()
+
+    def items(self):
+        self._resolve()
+        return super().items()
+
+
 def VLM(prompt: str, image: bytes, model: str = "charles-json",
          image_type: str = "image/png", json: bool = True,
          factory_id: int = 0, endpoint: str = None, timeout: int = 120) -> LLMResult:
