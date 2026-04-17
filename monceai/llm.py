@@ -217,18 +217,35 @@ def LLM(prompt: str, model: str = "charles-science", image: bytes = None,
     )
 
 
-class Charles:
+class Charles(str):
     """
-    from monceai import Charles
+    Text in, text out. Fire and forget.
 
-    c = Charles()
-    r = c("6x7")                    # auto-routes to best sub-model
-    r = c("factor 10403")           # → charles-auma
-    r = c("describe", image=img)    # → charles-json (VLM)
-    r = c("is K4 3-colorable?")     # → charles-science
+        from monceai import Charles
 
-    Charles routes via 1 Haiku call uphill (classify → pick sub-models),
-    fires them in parallel, then 1 Haiku call downhill (synthesize).
+        Charles("6x7")                    # → "42"
+        Charles("factor 10403")           # → "10403 = 101 × 103"
+        Charles("morning bruv")           # → "Morning! ..."
+
+        # It's a string — use it anywhere
+        print(Charles("what is pi?"))
+        answer = Charles("8x9")
+        f"The answer is {Charles('6x7')}"
+
+        # Access metadata via .result
+        c = Charles("6x7")
+        c.result.model        # "monceai-charles-auma"
+        c.result.elapsed_ms   # 4200
+        c.result.sat_memory   # {"formula": "...", "auma_x": [1,0,1,0,1,0]}
+        c.result.json         # parsed dict (charles-json)
+
+        # VLM
+        Charles("describe", image=open("photo.png","rb").read())
+
+        # Strategies
+        Charles("minimize x^2", strategy="math")
+        Charles("is K4 3-colorable?", strategy="science")
+        Charles("list primes", strategy="json")
     """
 
     STRATEGIES = {
@@ -242,34 +259,43 @@ class Charles:
         "all":     ["charles-auma", "charles-science", "charles-json"],
     }
 
-    def __init__(self, endpoint: str = None, factory_id: int = 0, timeout: int = 90):
-        self.endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
-        self.factory_id = factory_id
-        self.timeout = timeout
-        self._http = requests.Session()
+    def __new__(cls, prompt: str = None, image: bytes = None, image_type: str = "image/png",
+                strategy: str = None, factory_id: int = 0, endpoint: str = None, timeout: int = 90):
+        if prompt is None:
+            instance = super().__new__(cls, "")
+            instance.result = LLMResult()
+            instance._endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+            instance._factory_id = factory_id
+            instance._timeout = timeout
+            return instance
 
-    def __call__(self, prompt: str, image: bytes = None, image_type: str = "image/png",
-                 strategy: str = None, timeout: int = None) -> LLMResult:
-        timeout = timeout or self.timeout
+        ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
 
         if image:
-            return _chat(text=prompt, image=image, image_type=image_type,
-                         model="charles-json", factory_id=self.factory_id,
-                         endpoint=self.endpoint, session=self._http, timeout=timeout)
+            r = _chat(text=prompt, image=image, image_type=image_type,
+                       model="charles-json", factory_id=factory_id,
+                       endpoint=ep, timeout=timeout)
+            instance = super().__new__(cls, r.text)
+            instance.result = r
+            return instance
 
-        if strategy and strategy in self.STRATEGIES:
-            models = self.STRATEGIES[strategy]
+        if strategy and strategy in cls.STRATEGIES:
+            models = cls.STRATEGIES[strategy]
         else:
-            models = self._route(prompt)
+            models = cls._route_static(prompt)
 
         if len(models) == 1:
-            return _chat(text=prompt, model=_resolve_model(models[0]),
-                         factory_id=self.factory_id, endpoint=self.endpoint,
-                         session=self._http, timeout=timeout)
+            r = _chat(text=prompt, model=_resolve_model(models[0]),
+                       factory_id=factory_id, endpoint=ep, timeout=timeout)
+        else:
+            r = cls._parallel_static(prompt, models, factory_id, ep, timeout)
 
-        return self._parallel(prompt, models, timeout)
+        instance = super().__new__(cls, r.text)
+        instance.result = r
+        return instance
 
-    def _route(self, prompt: str) -> list:
+    @staticmethod
+    def _route_static(prompt: str) -> list:
         p = prompt.lower()
         if any(w in p for w in ["x", "*", "+", "-", "/", "%", "factor", "minimize", "maximize",
                                 "root", "sqrt", "solve", "find", "^", "equation"]):
@@ -281,53 +307,44 @@ class Charles:
             return ["charles-json"]
         return ["charles"]
 
-    def _parallel(self, prompt: str, models: list, timeout: int) -> LLMResult:
+    @staticmethod
+    def _parallel_static(prompt, models, factory_id, endpoint, timeout):
         from concurrent.futures import ThreadPoolExecutor, as_completed
         results = {}
         with ThreadPoolExecutor(max_workers=len(models)) as pool:
             futures = {
                 pool.submit(_chat, text=prompt, model=_resolve_model(m),
-                            factory_id=self.factory_id, endpoint=self.endpoint,
+                            factory_id=factory_id, endpoint=endpoint,
                             session=requests.Session(), timeout=timeout): m
                 for m in models
             }
             for f in as_completed(futures):
-                m = futures[f]
-                results[m] = f.result()
-
+                results[futures[f]] = f.result()
         best = None
         for m in models:
             r = results.get(m)
-            if r and r.ok:
-                if best is None or len(r.text) > len(best.text):
-                    best = r
+            if r and r.ok and (best is None or len(r.text) > len(best.text)):
+                best = r
         if best is None:
             best = next(iter(results.values()))
-
         best.sat_memory["parallel_models"] = list(results.keys())
-        best.sat_memory["parallel_results"] = {
-            m: {"ok": r.ok, "tokens": r.input_tokens + r.output_tokens, "ms": r.elapsed_ms}
-            for m, r in results.items()
-        }
         return best
 
-    def math(self, prompt: str, timeout: int = None) -> LLMResult:
-        return self(prompt, strategy="math", timeout=timeout)
+    @staticmethod
+    def math(prompt, **kw):
+        return Charles(prompt, strategy="math", **kw)
 
-    def science(self, prompt: str, timeout: int = None) -> LLMResult:
-        return self(prompt, strategy="science", timeout=timeout)
+    @staticmethod
+    def science(prompt, **kw):
+        return Charles(prompt, strategy="science", **kw)
 
-    def json(self, prompt: str, timeout: int = None) -> LLMResult:
-        return _chat(text=prompt, model="charles-json", factory_id=self.factory_id,
-                     endpoint=self.endpoint, session=self._http, timeout=timeout or self.timeout)
+    @staticmethod
+    def json(prompt, **kw):
+        return Charles(prompt, strategy="json", **kw)
 
-    def vlm(self, prompt: str, image: bytes, image_type: str = "image/png", timeout: int = None) -> LLMResult:
-        return _chat(text=prompt, image=image, image_type=image_type, model="charles-json",
-                     factory_id=self.factory_id, endpoint=self.endpoint,
-                     session=self._http, timeout=timeout or self.timeout)
-
-    def __repr__(self):
-        return f"Charles(endpoint={self.endpoint!r}, factory={self.factory_id})"
+    @staticmethod
+    def vlm(prompt, image, **kw):
+        return Charles(prompt, image=image, **kw)
 
 
 def VLM(prompt: str, image: bytes, model: str = "charles-json",
