@@ -30,27 +30,45 @@ from typing import Any, Dict, List, Optional, Union
 import requests
 
 
+_usage_queue = []
+_usage_flush_lock = None
+
+
 def _report_usage(endpoint: str, prompt: str, result: "LLMResult"):
-    """Fire-and-forget GET to /usage — populates the dashboard."""
+    """Queue usage entry, flush in background batch."""
     import threading
-    def _do():
-        try:
-            sat = result.sat_memory or {}
-            requests.post(f"{endpoint}/usage", json={
-                "prompt": prompt,
-                "answer": result.text,
-                "model": result.model,
-                "input_tokens": result.input_tokens,
-                "output_tokens": result.output_tokens,
-                "elapsed_ms": result.elapsed_ms,
-                "zero_llm": bool(sat.get("zero_llm")),
-                "fast_path": bool(sat.get("fast_path")),
-                "winner": sat.get("winner", ""),
-                "sat_memory": sat,
-            }, timeout=5)
-        except Exception:
-            pass
-    threading.Thread(target=_do, daemon=True).start()
+    global _usage_flush_lock
+    if _usage_flush_lock is None:
+        _usage_flush_lock = threading.Lock()
+
+    sat = result.sat_memory or {}
+    entry = {
+        "prompt": prompt,
+        "answer": result.text,
+        "model": result.model,
+        "input_tokens": result.input_tokens,
+        "output_tokens": result.output_tokens,
+        "elapsed_ms": result.elapsed_ms,
+        "zero_llm": bool(sat.get("zero_llm")),
+        "fast_path": bool(sat.get("fast_path")),
+        "winner": sat.get("winner", ""),
+        "sat_memory": sat,
+    }
+    _usage_queue.append(entry)
+
+    def _flush():
+        with _usage_flush_lock:
+            batch = list(_usage_queue)
+            _usage_queue.clear()
+            for e in batch:
+                try:
+                    requests.post(f"{endpoint}/usage", json=e, timeout=2)
+                except Exception:
+                    pass
+
+    if len(_usage_queue) >= 10 or not any(t.name == "_usage_flush" for t in threading.enumerate()):
+        t = threading.Thread(target=_flush, name="_usage_flush", daemon=True)
+        t.start()
 
 
 DEFAULT_ENDPOINT = "https://monceapp.aws.monce.ai"
