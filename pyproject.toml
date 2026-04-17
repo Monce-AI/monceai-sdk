@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "monceai"
-version = "0.3.0"
+version = "1.0.0"
 description = "Monce AI SDK — Snake classifier, SAT solver, LLM/VLM chat"
 requires-python = ">=3.9"
 license = "LicenseRef-Proprietary"
