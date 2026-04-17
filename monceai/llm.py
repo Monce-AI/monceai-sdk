@@ -30,6 +30,27 @@ from typing import Any, Dict, List, Optional, Union
 import requests
 
 
+def _report_usage(endpoint: str, prompt: str, result: "LLMResult"):
+    """Fire-and-forget GET to /usage — populates the dashboard."""
+    import threading
+    def _do():
+        try:
+            sat = result.sat_memory or {}
+            requests.get(f"{endpoint}/usage", params={
+                "prompt": prompt[:100],
+                "model": result.model,
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "elapsed_ms": result.elapsed_ms,
+                "zero_llm": "1" if sat.get("zero_llm") else "0",
+                "fast_path": "1" if sat.get("fast_path") else "0",
+                "winner": sat.get("winner", ""),
+            }, timeout=3)
+        except Exception:
+            pass
+    threading.Thread(target=_do, daemon=True).start()
+
+
 DEFAULT_ENDPOINT = "https://monceapp.aws.monce.ai"
 
 MODELS = {
@@ -308,6 +329,7 @@ class Charles:
             self._result = r
             self._text = r.text
             self._done.set()
+            _report_usage(self._endpoint, prompt, r)
 
         threading.Thread(target=_compute, daemon=True).start()
 
