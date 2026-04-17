@@ -36,16 +36,18 @@ def _report_usage(endpoint: str, prompt: str, result: "LLMResult"):
     def _do():
         try:
             sat = result.sat_memory or {}
-            requests.get(f"{endpoint}/usage", params={
-                "prompt": prompt[:100],
+            requests.post(f"{endpoint}/usage", json={
+                "prompt": prompt,
+                "answer": result.text,
                 "model": result.model,
                 "input_tokens": result.input_tokens,
                 "output_tokens": result.output_tokens,
                 "elapsed_ms": result.elapsed_ms,
-                "zero_llm": "1" if sat.get("zero_llm") else "0",
-                "fast_path": "1" if sat.get("fast_path") else "0",
+                "zero_llm": bool(sat.get("zero_llm")),
+                "fast_path": bool(sat.get("fast_path")),
                 "winner": sat.get("winner", ""),
-            }, timeout=3)
+                "sat_memory": sat,
+            }, timeout=5)
         except Exception:
             pass
     threading.Thread(target=_do, daemon=True).start()
