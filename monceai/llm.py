@@ -217,35 +217,39 @@ def LLM(prompt: str, model: str = "charles-science", image: bytes = None,
     )
 
 
-class Charles(str):
+class Charles:
     """
-    Text in, text out. Fire and forget.
+    Lazy async compute. Fires on construction, resolves on read.
 
         from monceai import Charles
 
-        Charles("6x7")                    # → "42"
-        Charles("factor 10403")           # → "10403 = 101 × 103"
-        Charles("morning bruv")           # → "Morning! ..."
+        # These fire INSTANTLY — all 3 compute in parallel
+        a = Charles("6x7")
+        b = Charles("factor 10403")
+        c = Charles("roots of z^2+1=0")
 
-        # It's a string — use it anywhere
-        print(Charles("what is pi?"))
-        answer = Charles("8x9")
-        f"The answer is {Charles('6x7')}"
+        # Block only when you READ — by now they're done
+        print(a)          # "42"
+        print(b)          # "10403 = 101 × 103"
+        print(c)          # "z = ±i"
 
-        # Access metadata via .result
-        c = Charles("6x7")
-        c.result.model        # "monceai-charles-auma"
-        c.result.elapsed_ms   # 4200
-        c.result.sat_memory   # {"formula": "...", "auma_x": [1,0,1,0,1,0]}
-        c.result.json         # parsed dict (charles-json)
+        # It's a string everywhere
+        f"Answer: {a}"    # "Answer: 42"
+        a + " is the answer"
+        a.upper()
+        len(a)
 
-        # VLM
-        Charles("describe", image=open("photo.png","rb").read())
+        # Metadata
+        a.result.model       # "monceai-charles-auma"
+        a.result.elapsed_ms  # 4200
+        a.result.sat_memory  # {"formula": "...", "auma_x": [1,0,1,0,1,0]}
 
         # Strategies
         Charles("minimize x^2", strategy="math")
-        Charles("is K4 3-colorable?", strategy="science")
-        Charles("list primes", strategy="json")
+        Charles.math("minimize x^2")
+        Charles.science("is K4 3-colorable?")
+        Charles.json("list primes")
+        Charles.vlm("describe", image=img)
     """
 
     STRATEGIES = {
@@ -259,40 +263,110 @@ class Charles(str):
         "all":     ["charles-auma", "charles-science", "charles-json"],
     }
 
-    def __new__(cls, prompt: str = None, image: bytes = None, image_type: str = "image/png",
-                strategy: str = None, factory_id: int = 0, endpoint: str = None, timeout: int = 90):
-        if prompt is None:
-            instance = super().__new__(cls, "")
-            instance.result = LLMResult()
-            instance._endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
-            instance._factory_id = factory_id
-            instance._timeout = timeout
-            return instance
+    def __init__(self, prompt: str = None, image: bytes = None, image_type: str = "image/png",
+                 strategy: str = None, factory_id: int = 0, endpoint: str = None, timeout: int = 90):
+        import threading
+        self._prompt = prompt or ""
+        self._endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+        self._factory_id = factory_id
+        self._timeout = timeout
+        self._result = None
+        self._text = None
+        self._done = threading.Event()
 
-        ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+        if prompt is None:
+            self._text = ""
+            self._result = LLMResult()
+            self._done.set()
+            return
 
         if image:
-            r = _chat(text=prompt, image=image, image_type=image_type,
-                       model="charles-json", factory_id=factory_id,
-                       endpoint=ep, timeout=timeout)
-            instance = super().__new__(cls, r.text)
-            instance.result = r
-            return instance
-
-        if strategy and strategy in cls.STRATEGIES:
-            models = cls.STRATEGIES[strategy]
+            models = ["charles-json"]
+            self._image = image
+            self._image_type = image_type
         else:
-            models = cls._route_static(prompt)
+            self._image = None
+            self._image_type = "image/png"
+            if strategy and strategy in self.STRATEGIES:
+                models = self.STRATEGIES[strategy]
+            else:
+                models = self._route_static(prompt)
 
-        if len(models) == 1:
-            r = _chat(text=prompt, model=_resolve_model(models[0]),
-                       factory_id=factory_id, endpoint=ep, timeout=timeout)
-        else:
-            r = cls._parallel_static(prompt, models, factory_id, ep, timeout)
+        self._models = models
 
-        instance = super().__new__(cls, r.text)
-        instance.result = r
-        return instance
+        # Fire in background — resolves when you read
+        def _compute():
+            if self._image:
+                r = _chat(text=prompt, image=self._image, image_type=self._image_type,
+                           model="charles-json", factory_id=factory_id,
+                           endpoint=self._endpoint, timeout=timeout)
+            elif len(models) == 1:
+                r = _chat(text=prompt, model=_resolve_model(models[0]),
+                           factory_id=factory_id, endpoint=self._endpoint, timeout=timeout)
+            else:
+                r = self._parallel_static(prompt, models, factory_id, self._endpoint, timeout)
+            self._result = r
+            self._text = r.text
+            self._done.set()
+
+        threading.Thread(target=_compute, daemon=True).start()
+
+    def _resolve(self):
+        self._done.wait()
+
+    @property
+    def result(self) -> LLMResult:
+        self._resolve()
+        return self._result
+
+    # ── string interface: resolves on any read ──
+    def __str__(self):
+        self._resolve()
+        return self._text
+
+    def __repr__(self):
+        if self._done.is_set():
+            preview = (self._text or "")[:60].replace("\n", " ")
+            return f'Charles({self._prompt!r}) → {preview!r}'
+        return f'Charles({self._prompt!r}) → [computing...]'
+
+    def __format__(self, spec):
+        return format(str(self), spec)
+
+    def __add__(self, other):
+        return str(self) + other
+
+    def __radd__(self, other):
+        return other + str(self)
+
+    def __len__(self):
+        return len(str(self))
+
+    def __contains__(self, item):
+        return item in str(self)
+
+    def __getitem__(self, key):
+        return str(self)[key]
+
+    def __eq__(self, other):
+        return str(self) == str(other)
+
+    def __hash__(self):
+        return hash(str(self))
+
+    def __bool__(self):
+        self._resolve()
+        return bool(self._text)
+
+    def upper(self): return str(self).upper()
+    def lower(self): return str(self).lower()
+    def strip(self): return str(self).strip()
+    def split(self, *a, **kw): return str(self).split(*a, **kw)
+    def startswith(self, *a): return str(self).startswith(*a)
+    def endswith(self, *a): return str(self).endswith(*a)
+    def replace(self, *a): return str(self).replace(*a)
+    def find(self, *a): return str(self).find(*a)
+    def count(self, *a): return str(self).count(*a)
 
     @staticmethod
     def _route_static(prompt: str) -> list:
