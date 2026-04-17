@@ -625,13 +625,16 @@ class Json(dict):
         return self._text
 
     def __repr__(self):
-        if self._done.is_set():
-            return f'Json({dict(self)})'
-        return f'Json({self._prompt!r}) → [computing...]'
+        self._resolve()
+        return _json.dumps(dict(self), ensure_ascii=False, indent=2)
 
     def __str__(self):
         self._resolve()
         return _json.dumps(dict(self), ensure_ascii=False, indent=2)
+
+    def __iter__(self):
+        self._resolve()
+        return super().__iter__()
 
     def __getitem__(self, key):
         self._resolve()
