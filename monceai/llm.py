@@ -259,39 +259,27 @@ def LLM(prompt: str, model: str = "charles-science", image: bytes = None,
     )
 
 
-class Charles:
+class Charles(str):
     """
-    Lazy async compute. Fires on construction, resolves on read.
+    Text in, text out. Blocks on construction, returns a string.
 
         from monceai import Charles
 
-        # These fire INSTANTLY — all 3 compute in parallel
-        a = Charles("6x7")
-        b = Charles("factor 10403")
-        c = Charles("roots of z^2+1=0")
+        Charles("6x7")              # → "42"
+        Charles("factor 10403")     # → "10403 = 101 × 103"
+        print(Charles("6x7"))       # prints "42"
+        f"Answer: {Charles('8x9')}" # "Answer: 72"
 
-        # Block only when you READ — by now they're done
-        print(a)          # "42"
-        print(b)          # "10403 = 101 × 103"
-        print(c)          # "z = ±i"
+        # It's a string
+        len(Charles("6x7"))
+        Charles("6x7").upper()
+        Charles("6x7") + " done"
 
-        # It's a string everywhere
-        f"Answer: {a}"    # "Answer: 42"
-        a + " is the answer"
-        a.upper()
-        len(a)
-
-        # Metadata
-        a.result.model       # "monceai-charles-auma"
-        a.result.elapsed_ms  # 4200
-        a.result.sat_memory  # {"formula": "...", "auma_x": [1,0,1,0,1,0]}
-
-        # Strategies
-        Charles("minimize x^2", strategy="math")
-        Charles.math("minimize x^2")
-        Charles.science("is K4 3-colorable?")
-        Charles.json("list primes")
-        Charles.vlm("describe", image=img)
+        # Metadata via .result
+        c = Charles("6x7")
+        c.result.model
+        c.result.elapsed_ms
+        c.result.sat_memory
     """
 
     STRATEGIES = {
@@ -305,111 +293,32 @@ class Charles:
         "all":     ["charles-auma", "charles-science", "charles-json"],
     }
 
-    def __init__(self, prompt: str = None, image: bytes = None, image_type: str = "image/png",
-                 strategy: str = None, factory_id: int = 0, endpoint: str = None, timeout: int = 90):
-        import threading
-        self._prompt = prompt or ""
-        self._endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
-        self._factory_id = factory_id
-        self._timeout = timeout
-        self._result = None
-        self._text = None
-        self._done = threading.Event()
+    def __new__(cls, prompt: str = "", image: bytes = None, image_type: str = "image/png",
+                strategy: str = None, factory_id: int = 0, endpoint: str = None, timeout: int = 90):
+        ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
 
-        if prompt is None:
-            self._text = ""
-            self._result = LLMResult()
-            self._done.set()
-            return
+        if not prompt:
+            instance = super().__new__(cls, "")
+            instance.result = LLMResult()
+            return instance
 
         if image:
             models = ["charles-json"]
-            self._image = image
-            self._image_type = image_type
+        elif strategy and strategy in cls.STRATEGIES:
+            models = cls.STRATEGIES[strategy]
         else:
-            self._image = None
-            self._image_type = "image/png"
-            if strategy and strategy in self.STRATEGIES:
-                models = self.STRATEGIES[strategy]
-            else:
-                models = self._route_static(prompt)
+            models = cls._route_static(prompt)
 
-        self._models = models
+        if len(models) == 1:
+            r = _chat(text=prompt, model=_resolve_model(models[0]),
+                       factory_id=factory_id, endpoint=ep, timeout=timeout)
+        else:
+            r = cls._parallel_static(prompt, models, factory_id, ep, timeout)
 
-        # Fire in background — resolves when you read
-        def _compute():
-            if self._image:
-                r = _chat(text=prompt, image=self._image, image_type=self._image_type,
-                           model="charles-json", factory_id=factory_id,
-                           endpoint=self._endpoint, timeout=timeout)
-            elif len(models) == 1:
-                r = _chat(text=prompt, model=_resolve_model(models[0]),
-                           factory_id=factory_id, endpoint=self._endpoint, timeout=timeout)
-            else:
-                r = self._parallel_static(prompt, models, factory_id, self._endpoint, timeout)
-            self._result = r
-            self._text = r.text
-            self._done.set()
-            _report_usage(self._endpoint, prompt, r)
-
-        threading.Thread(target=_compute, daemon=True).start()
-
-    def _resolve(self):
-        self._done.wait()
-
-    @property
-    def result(self) -> LLMResult:
-        self._resolve()
-        return self._result
-
-    # ── string interface: resolves on any read ──
-    def __str__(self):
-        self._resolve()
-        return self._text
-
-    def __repr__(self):
-        if self._done.is_set():
-            preview = (self._text or "")[:60].replace("\n", " ")
-            return f'Charles({self._prompt!r}) → {preview!r}'
-        return f'Charles({self._prompt!r}) → [computing...]'
-
-    def __format__(self, spec):
-        return format(str(self), spec)
-
-    def __add__(self, other):
-        return str(self) + other
-
-    def __radd__(self, other):
-        return other + str(self)
-
-    def __len__(self):
-        return len(str(self))
-
-    def __contains__(self, item):
-        return item in str(self)
-
-    def __getitem__(self, key):
-        return str(self)[key]
-
-    def __eq__(self, other):
-        return str(self) == str(other)
-
-    def __hash__(self):
-        return hash(str(self))
-
-    def __bool__(self):
-        self._resolve()
-        return bool(self._text)
-
-    def upper(self): return str(self).upper()
-    def lower(self): return str(self).lower()
-    def strip(self): return str(self).strip()
-    def split(self, *a, **kw): return str(self).split(*a, **kw)
-    def startswith(self, *a): return str(self).startswith(*a)
-    def endswith(self, *a): return str(self).endswith(*a)
-    def replace(self, *a): return str(self).replace(*a)
-    def find(self, *a): return str(self).find(*a)
-    def count(self, *a): return str(self).count(*a)
+        instance = super().__new__(cls, r.text)
+        instance.result = r
+        _report_usage(ep, prompt, r)
+        return instance
 
     @staticmethod
     def _route_static(prompt: str) -> list:
@@ -464,209 +373,88 @@ class Charles:
         return Charles(prompt, image=image, **kw)
 
 
-class Moncey:
+class Moncey(str):
     """
-    Glass industry sales agent. Lazy — fires on construction, resolves on read.
+    Glass industry sales agent. Text in, text out.
 
         from monceai import Moncey
 
-        Moncey("devis 44.2 feuillete LowE argon 16mm")
-        # → "Bonjour, j'ai identifié: Feuilleté 44.2 + Intercalaire 16mm + Argon..."
+        Moncey("44.2 feuillete LowE 16mm")
+        # → "Bonjour, j'ai identifié: Feuilleté 44.2 + Intercalaire 16mm..."
 
-        Moncey("relance client Dupont pour la commande 1234")
-        # → professional follow-up in French
-
-        # It's a string
         print(Moncey("réclamation casse sur livraison"))
 
-        # Metadata
+        # Metadata via .result
         m = Moncey("devis 10 vitrages")
-        m.result.sat_memory["snake_comprendre"]  # glass decomposition
-        m.result.sat_memory["comprendre"]         # 10 classifiers
+        m.result.sat_memory["snake_comprendre"]
     """
 
-    def __init__(self, prompt: str, factory_id: int = 3,
-                 endpoint: str = None, timeout: int = 30):
-        import threading
-        self._prompt = prompt
-        self._endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
-        self._factory_id = factory_id
-        self._result = None
-        self._text = None
-        self._done = threading.Event()
+    def __new__(cls, prompt: str = "", factory_id: int = 3,
+                endpoint: str = None, timeout: int = 30):
+        ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
 
-        def _compute():
-            r = _chat(text=prompt, model="moncey", factory_id=factory_id,
-                       endpoint=self._endpoint, timeout=timeout)
-            self._result = r
-            self._text = r.text
-            self._done.set()
-            _report_usage(self._endpoint, prompt, r)
+        if not prompt:
+            instance = super().__new__(cls, "")
+            instance.result = LLMResult()
+            return instance
 
-        threading.Thread(target=_compute, daemon=True).start()
+        r = _chat(text=prompt, model="moncey", factory_id=factory_id,
+                   endpoint=ep, timeout=timeout)
 
-    def _resolve(self):
-        self._done.wait()
-
-    @property
-    def result(self) -> LLMResult:
-        self._resolve()
-        return self._result
-
-    def __str__(self):
-        self._resolve()
-        return self._text
-
-    def __repr__(self):
-        if self._done.is_set():
-            preview = (self._text or "")[:60].replace("\n", " ")
-            return f'Moncey({self._prompt!r}) → {preview!r}'
-        return f'Moncey({self._prompt!r}) → [computing...]'
-
-    def __format__(self, spec):
-        return format(str(self), spec)
-
-    def __add__(self, other):
-        return str(self) + other
-
-    def __radd__(self, other):
-        return other + str(self)
-
-    def __len__(self):
-        return len(str(self))
-
-    def __bool__(self):
-        self._resolve()
-        return bool(self._text)
+        instance = super().__new__(cls, r.text)
+        instance.result = r
+        _report_usage(ep, prompt, r)
+        return instance
 
 
 class Json(dict):
     """
-    Dump anything to valid JSON. Lazy — fires on construction, resolves on read.
+    Text in, JSON out. Blocks on construction, returns a dict.
 
         from monceai import Json
 
-        Json("list the first 5 prime numbers")
-        # → {"primes": [2, 3, 5, 7, 11]}
+        Json("list 5 primes")           # → {"primes": [2, 3, 5, 7, 11]}
+        Json('{"broken: json}')         # → fixed
+        Json("..." + Moncey("..."))     # → chains
 
-        Json('{"name": "Charles, "age": 26}')  # broken JSON → fixed
-        # → {"name": "Charles", "age": 26}
+        j = Json("3 colors")
+        j["colors"]                     # list access
+        print(j)                        # json.dumps(indent=2)
 
-        Json("nom: Charles, age: 26, ville: Paris")  # text → JSON
-        # → {"nom": "Charles", "age": 26, "ville": "Paris"}
-
-        Json("translate to json: 3 apples at 2 euros each")
-        # → {"items": [{"name": "apples", "quantity": 3, "price": 2}]}
-
-        # It's a dict
-        j = Json("list 3 colors")
-        j["colors"]           # ["red", "green", "blue"]
-        j.get("colors", [])   # works
-        len(j)                # number of keys
-
-        # Raw text
-        j.text                # raw JSON string
-        j.result              # full LLMResult
+        j.result                        # LLMResult metadata
     """
-
-    def __new__(cls, prompt: str = "", factory_id: int = 0,
-                endpoint: str = None, timeout: int = 30):
-        instance = super().__new__(cls)
-        return instance
 
     def __init__(self, prompt: str = "", factory_id: int = 0,
                  endpoint: str = None, timeout: int = 30):
         super().__init__()
-        import threading
-        self._prompt = prompt
-        self._endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
-        self._result = None
-        self._text = None
-        self._done = threading.Event()
+        ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
 
         if not prompt:
-            self._text = "{}"
-            self._result = LLMResult()
-            self._done.set()
+            self.result = LLMResult()
             return
 
-        def _compute():
-            r = _chat(text=prompt, model="charles-json", factory_id=factory_id,
-                       endpoint=self._endpoint, timeout=timeout)
-            self._result = r
-            self._text = r.text
-            # Parse into self (dict)
-            try:
-                parsed = _json.loads(r.text)
-                if isinstance(parsed, dict):
-                    self.update(parsed)
-                elif isinstance(parsed, list):
-                    self.update({"data": parsed})
-                else:
-                    self.update({"value": parsed})
-            except (ValueError, TypeError):
-                self.update({"raw": r.text})
-            self._done.set()
-            _report_usage(self._endpoint, prompt, r)
+        r = _chat(text=prompt, model="charles-json", factory_id=factory_id,
+                   endpoint=ep, timeout=timeout)
+        self.result = r
 
-        threading.Thread(target=_compute, daemon=True).start()
+        try:
+            parsed = _json.loads(r.text)
+            if isinstance(parsed, dict):
+                self.update(parsed)
+            elif isinstance(parsed, list):
+                self.update({"data": parsed})
+            else:
+                self.update({"value": parsed})
+        except (ValueError, TypeError):
+            self.update({"raw": r.text})
 
-    def _resolve(self):
-        self._done.wait()
-
-    @property
-    def result(self) -> LLMResult:
-        self._resolve()
-        return self._result
-
-    @property
-    def text(self) -> str:
-        self._resolve()
-        return self._text
+        _report_usage(ep, prompt, r)
 
     def __repr__(self):
-        self._resolve()
         return _json.dumps(dict(self), ensure_ascii=False, indent=2)
 
     def __str__(self):
-        self._resolve()
         return _json.dumps(dict(self), ensure_ascii=False, indent=2)
-
-    def __iter__(self):
-        self._resolve()
-        return super().__iter__()
-
-    def __getitem__(self, key):
-        self._resolve()
-        return super().__getitem__(key)
-
-    def __contains__(self, key):
-        self._resolve()
-        return super().__contains__(key)
-
-    def __len__(self):
-        self._resolve()
-        return super().__len__()
-
-    def __bool__(self):
-        self._resolve()
-        return super().__len__() > 0
-
-    def get(self, key, default=None):
-        self._resolve()
-        return super().get(key, default)
-
-    def keys(self):
-        self._resolve()
-        return super().keys()
-
-    def values(self):
-        self._resolve()
-        return super().values()
-
-    def items(self):
-        self._resolve()
-        return super().items()
 
 
 def VLM(prompt: str, image: bytes, model: str = "charles-json",
