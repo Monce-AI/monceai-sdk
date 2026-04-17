@@ -13,7 +13,11 @@ Text in, answer out. Three modes:
     answer = LLM("what is this?", image=open("photo.png","rb").read())
     answer = LLM("extract fields", image=img_bytes, json=True)
 
-API key from MONCEAPP_API_KEY env var (optional — public models don't require it).
+No API key required. MonceApp is free and open — zero auth on all endpoints.
+LLM, VLM, and Charles work out of the box with `pip install monceai`.
+
+Snake and SAT require API keys (SNAKE_API_KEY, SAT_API_KEY) because they
+spin Lambda workers. LLM/VLM/Charles are free — Bedrock costs are on us.
 """
 
 import base64
