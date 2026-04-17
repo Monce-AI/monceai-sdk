@@ -261,25 +261,18 @@ def LLM(prompt: str, model: str = "charles-science", image: bytes = None,
 
 class Charles(str):
     """
-    Text in, text out. Blocks on construction, returns a string.
+    Two modes:
 
-        from monceai import Charles
-
+        # With text → blocks, returns str
         Charles("6x7")              # → "42"
         Charles("factor 10403")     # → "10403 = 101 × 103"
-        print(Charles("6x7"))       # prints "42"
-        f"Answer: {Charles('8x9')}" # "Answer: 72"
 
-        # It's a string
-        len(Charles("6x7"))
-        Charles("6x7").upper()
-        Charles("6x7") + " done"
-
-        # Metadata via .result
-        c = Charles("6x7")
-        c.result.model
-        c.result.elapsed_ms
-        c.result.sat_memory
+        # Without text → reusable client, fires parallel futures
+        c = Charles()
+        a = c("6x7")               # fires in background
+        b = c("8x9")               # fires in background
+        c("roots of z^2+1=0")      # fires in background
+        print(a)                    # blocks on first read
     """
 
     STRATEGIES = {
@@ -293,14 +286,19 @@ class Charles(str):
         "all":     ["charles-auma", "charles-science", "charles-json"],
     }
 
-    def __new__(cls, prompt: str = "", image: bytes = None, image_type: str = "image/png",
+    def __new__(cls, prompt: str = None, image: bytes = None, image_type: str = "image/png",
                 strategy: str = None, factory_id: int = 0, endpoint: str = None, timeout: int = 90):
-        ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
 
-        if not prompt:
-            instance = super().__new__(cls, "")
-            instance.result = LLMResult()
-            return instance
+        # No prompt → return a reusable client instance (not a str)
+        if prompt is None:
+            client = object.__new__(_CharlesClient)
+            client._endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+            client._factory_id = factory_id
+            client._timeout = timeout
+            return client
+
+        # With prompt → block, return str
+        ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
 
         if image:
             models = ["charles-json"]
@@ -373,31 +371,87 @@ class Charles(str):
         return Charles(prompt, image=image, **kw)
 
 
+class _CharlesFuture:
+    """Lazy future returned by Charles() client mode."""
+    def __init__(self, prompt, endpoint, factory_id, timeout):
+        import threading
+        self._prompt = prompt
+        self._result = None
+        self._text = None
+        self._done = threading.Event()
+
+        def _compute():
+            models = Charles._route_static(prompt)
+            if len(models) == 1:
+                r = _chat(text=prompt, model=_resolve_model(models[0]),
+                           factory_id=factory_id, endpoint=endpoint, timeout=timeout)
+            else:
+                r = Charles._parallel_static(prompt, models, factory_id, endpoint, timeout)
+            self._result = r
+            self._text = r.text
+            self._done.set()
+            _report_usage(endpoint, prompt, r)
+
+        threading.Thread(target=_compute, daemon=True).start()
+
+    @property
+    def result(self):
+        self._done.wait()
+        return self._result
+
+    def __str__(self):
+        self._done.wait()
+        return self._text
+
+    def __repr__(self):
+        if self._done.is_set():
+            return self._text[:60]
+        return f'[computing {self._prompt[:30]}...]'
+
+    def __format__(self, spec): return format(str(self), spec)
+    def __add__(self, other): return str(self) + other
+    def __radd__(self, other): return other + str(self)
+    def __len__(self): return len(str(self))
+    def __bool__(self): self._done.wait(); return bool(self._text)
+
+
+class _CharlesClient:
+    """Reusable client returned by Charles() with no args. Fires parallel futures."""
+
+    def __call__(self, prompt, **kw):
+        return _CharlesFuture(prompt, self._endpoint,
+                              kw.get("factory_id", self._factory_id),
+                              kw.get("timeout", self._timeout))
+
+    def __repr__(self):
+        return f'Charles(endpoint={self._endpoint!r})'
+
+
 class Moncey(str):
     """
-    Glass industry sales agent. Text in, text out.
+    Two modes:
 
-        from monceai import Moncey
+        # With text → blocks, returns str
+        Moncey("44.2 feuillete LowE 16mm")  # → "Bonjour..."
 
-        Moncey("44.2 feuillete LowE 16mm")
-        # → "Bonjour, j'ai identifié: Feuilleté 44.2 + Intercalaire 16mm..."
-
-        print(Moncey("réclamation casse sur livraison"))
-
-        # Metadata via .result
-        m = Moncey("devis 10 vitrages")
-        m.result.sat_memory["snake_comprendre"]
+        # Without text → reusable client, fires parallel futures
+        m = Moncey()
+        a = m("44.2 feuillete")     # fires in background
+        b = m("devis 20 vitrages")  # fires in background
+        print(a)                     # blocks on first read
     """
 
-    def __new__(cls, prompt: str = "", factory_id: int = 3,
+    def __new__(cls, prompt: str = None, factory_id: int = 3,
                 endpoint: str = None, timeout: int = 30):
+
+        if prompt is None:
+            client = object.__new__(_MonceyClient)
+            client._endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+            client._factory_id = factory_id
+            client._timeout = timeout
+            return client
+
         ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
-
-        if not prompt:
-            instance = super().__new__(cls, "")
-            instance.result = LLMResult()
-            return instance
-
         r = _chat(text=prompt, model="moncey", factory_id=factory_id,
                    endpoint=ep, timeout=timeout)
 
@@ -405,6 +459,58 @@ class Moncey(str):
         instance.result = r
         _report_usage(ep, prompt, r)
         return instance
+
+
+class _MonceyFuture:
+    """Lazy future for Moncey client mode."""
+    def __init__(self, prompt, endpoint, factory_id, timeout):
+        import threading
+        self._prompt = prompt
+        self._result = None
+        self._text = None
+        self._done = threading.Event()
+
+        def _compute():
+            r = _chat(text=prompt, model="moncey", factory_id=factory_id,
+                       endpoint=endpoint, timeout=timeout)
+            self._result = r
+            self._text = r.text
+            self._done.set()
+            _report_usage(endpoint, prompt, r)
+
+        threading.Thread(target=_compute, daemon=True).start()
+
+    @property
+    def result(self):
+        self._done.wait()
+        return self._result
+
+    def __str__(self):
+        self._done.wait()
+        return self._text
+
+    def __repr__(self):
+        if self._done.is_set():
+            return self._text[:60]
+        return f'[computing {self._prompt[:30]}...]'
+
+    def __format__(self, spec): return format(str(self), spec)
+    def __add__(self, other): return str(self) + other
+    def __radd__(self, other): return other + str(self)
+    def __len__(self): return len(str(self))
+    def __bool__(self): self._done.wait(); return bool(self._text)
+
+
+class _MonceyClient:
+    """Reusable client returned by Moncey() with no args."""
+
+    def __call__(self, prompt, **kw):
+        return _MonceyFuture(prompt, self._endpoint,
+                             kw.get("factory_id", self._factory_id),
+                             kw.get("timeout", self._timeout))
+
+    def __repr__(self):
+        return f'Moncey(endpoint={self._endpoint!r})'
 
 
 class Json(dict):
