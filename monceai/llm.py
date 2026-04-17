@@ -88,6 +88,7 @@ MODELS = {
     "nova-lite":         "eu.amazon.nova-lite-v1:0",
     "nova-micro":        "eu.amazon.nova-micro-v1:0",
     "moncey":            "moncey",
+    "concierge":         "concierge",
 }
 
 
@@ -591,3 +592,109 @@ def VLM(prompt: str, image: bytes, model: str = "charles-json",
         model=resolved, factory_id=factory_id,
         endpoint=endpoint, timeout=timeout, as_json=json,
     )
+
+
+CONCIERGE_ENDPOINT = "https://concierge.aws.monce.ai"
+
+
+def _concierge_chat(text: str, endpoint: str = None, timeout: int = 120) -> LLMResult:
+    url = f"{(endpoint or CONCIERGE_ENDPOINT).rstrip('/')}/chat"
+    t = time.time()
+    try:
+        resp = requests.post(url, json={"message": text}, timeout=timeout)
+        elapsed_ms = int((time.time() - t) * 1000)
+        if resp.status_code != 200:
+            return LLMResult(text=f"HTTP {resp.status_code}: {resp.text[:200]}",
+                             model="concierge", elapsed_ms=elapsed_ms)
+        body = resp.json()
+        return LLMResult(
+            text=body.get("reply", ""),
+            model="concierge",
+            elapsed_ms=elapsed_ms,
+            sat_memory={"tools_used": body.get("tools_used", []),
+                        "concierge_latency_ms": body.get("latency_ms", 0)},
+            raw=body,
+        )
+    except requests.exceptions.Timeout:
+        return LLMResult(text="Timeout", model="concierge",
+                         elapsed_ms=int((time.time() - t) * 1000))
+    except Exception as e:
+        return LLMResult(text=f"Error: {e}", model="concierge",
+                         elapsed_ms=int((time.time() - t) * 1000))
+
+
+class Concierge(str):
+    """
+    Memory + intelligence + Snake tools. Sonnet-powered.
+
+        # With text → blocks, returns str
+        Concierge("what's the accuracy for VIP today?")
+        Concierge("add synonym PLANILUX 4MM → 60442C for VIT")
+
+        # Without text → reusable client, fires parallel futures
+        c = Concierge()
+        a = c("standup report")
+        b = c("synonym recommendations")
+        print(a)  # blocks on first read
+    """
+
+    def __new__(cls, prompt: str = None, endpoint: str = None, timeout: int = 120):
+        if prompt is None:
+            client = object.__new__(_ConciergeClient)
+            client._endpoint = (endpoint or CONCIERGE_ENDPOINT).rstrip("/")
+            client._timeout = timeout
+            return client
+
+        ep = (endpoint or CONCIERGE_ENDPOINT).rstrip("/")
+        r = _concierge_chat(text=prompt, endpoint=ep, timeout=timeout)
+        instance = super().__new__(cls, r.text)
+        instance.result = r
+        _report_usage(DEFAULT_ENDPOINT, prompt, r)
+        return instance
+
+
+class _ConciergeFuture:
+    def __init__(self, prompt, endpoint, timeout):
+        import threading
+        self._prompt = prompt
+        self._result = None
+        self._text = None
+        self._done = threading.Event()
+
+        def _compute():
+            r = _concierge_chat(text=prompt, endpoint=endpoint, timeout=timeout)
+            self._result = r
+            self._text = r.text
+            self._done.set()
+            _report_usage(DEFAULT_ENDPOINT, prompt, r)
+
+        threading.Thread(target=_compute, daemon=True).start()
+
+    @property
+    def result(self):
+        self._done.wait()
+        return self._result
+
+    def __str__(self):
+        self._done.wait()
+        return self._text
+
+    def __repr__(self):
+        if self._done.is_set():
+            return self._text[:60]
+        return f'[computing {self._prompt[:30]}...]'
+
+    def __format__(self, spec): return format(str(self), spec)
+    def __add__(self, other): return str(self) + other
+    def __radd__(self, other): return other + str(self)
+    def __len__(self): return len(str(self))
+    def __bool__(self): self._done.wait(); return bool(self._text)
+
+
+class _ConciergeClient:
+    def __call__(self, prompt, **kw):
+        return _ConciergeFuture(prompt, self._endpoint,
+                                kw.get("timeout", self._timeout))
+
+    def __repr__(self):
+        return f'Concierge(endpoint={self._endpoint!r})'
