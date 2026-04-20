@@ -10,17 +10,20 @@
 [![License](https://img.shields.io/badge/license-proprietary-red)](LICENSE)
 [![Monce SAS](https://img.shields.io/badge/Monce-SAS-blue)](https://monce.ai)
 
-**LLM, VLM, Snake classifier, SAT solver — plus Matching, Calc, Diff. One SDK, zero config for chat.**
+**LLM, VLM, Snake, SAT, Charles, Moncey, Json, Concierge — plus Matching, Calc, Diff, Monolith + memory-augmented overlays. One SDK, zero config for chat.**
 
 ```python
-from monceai import Charles
+from monceai import Charles, Matching, Calc
 
-c = Charles()
-c("6x7")                                  # → "42" (boolean arithmetic over {0,1}^n)
-c("factor 10403")                          # → "101 × 103" (AUMA optimization)
-c("is K4 3-colorable?")                    # → SAT solver, graph coloring
-c.vlm("extract fields", image=img_bytes)   # → structured JSON from image
+Charles("6x7")                            # → "42" (boolean arithmetic)
+Calc("123x3456")                           # → "425088" (exact Decimal)
+Matching("LGB Menuiserie", factory_id=4)   # → client #60689 (89% conf)
+Matching("44.2 rTherm", factory_id=4)      # → article #63442 (100% conf)
 ```
+
+`Matching(text)` auto-routes client vs article in one parallel call.
+No need to specify `field=` — the server races both paths and returns
+the higher-confidence match.
 
 > Charles Dana &middot; Monce SAS &middot; April 2026 &middot; [Paper](https://monceapp.aws.monce.ai/paper)
 
@@ -40,7 +43,9 @@ Zero dependencies beyond `requests`. No API key needed for LLM/VLM/Charles.
 |--------|------|---------|------|
 | `LLM()` | **None** | monceapp.aws.monce.ai | Free |
 | `VLM()` | **None** | monceapp.aws.monce.ai | Free |
-| `Charles()` | **None** | monceapp.aws.monce.ai | Free |
+| `Charles()` / `Moncey()` | **None** | monceapp.aws.monce.ai | Free |
+| `Json()` / `Concierge()` | **None** | monceapp / concierge.aws.monce.ai | Free |
+| `Matching()` / `Calc()` / `Diff()` | **None** | monceapp.aws.monce.ai | Free |
 | `Snake()` | `SNAKE_API_KEY` | snakebatch.aws.monce.ai | Per-invocation |
 | `SAT()` | `SAT_API_KEY` | npdollars.aws.monce.ai | Per-invocation |
 
@@ -63,23 +68,53 @@ r.elapsed_ms     # wall clock
 r.sat_memory     # compute receipt (formula, evals, services fired)
 ```
 
-### 13 Models
+### Compute Models (charles family)
 
 | Shorthand | Engine | Latency | Cost/msg |
 |-----------|--------|---------|----------|
-| `charles-auma` | Haiku encode &rarr; AUMA {0,1}^n &rarr; Haiku (= or &asymp;) | 3-8s | ~$0.003 |
-| `charles-science` | Snake router &rarr; 7 services &rarr; Sonnet | 15-60s | ~$0.01 |
 | `charles` | 4x parallel (mem+csv+cnf+sudoku) &rarr; Sonnet | 8-15s | ~$0.01 |
+| `charles-auma` | Haiku encode &rarr; AUMA {0,1}^n &rarr; Haiku | 3-8s | ~$0.003 |
+| `charles-science` | Snake router &rarr; 7 services &rarr; Sonnet | 15-60s | ~$0.01 |
 | `charles-json` | Memory &rarr; Sonnet strict JSON, VLM | 5-15s | ~$0.01 |
 | `charles-architect` | Memory &rarr; Sonnet ASCII diagrams | 5-15s | ~$0.01 |
 | `concise` | charles &rarr; Haiku TL;DR | 10-20s | ~$0.01 |
 | `cc` | charles &parallel; concise &rarr; synthesis | 12-25s | ~$0.02 |
-| `sonnet` | Sonnet 4.6 + tools | 1-3s | ~$0.03 |
-| `sonnet4` | Sonnet 4 + tools | 2-4s | ~$0.03 |
-| `haiku` | Haiku 4.5 + tools | 1-2s | ~$0.003 |
-| `nova-pro` | Nova Pro (context only) | 0.8s | ~$0.008 |
-| `nova-lite` | Nova Lite (context only) | 0.7s | ~$0.001 |
-| `nova-micro` | Nova Micro (context only) | 0.6s | ~$0.0005 |
+| `moncey` | Glass sales agent (snake.aws + moncesuite) | 2-5s | ~$0.003 |
+| `concierge` | Knowledge base + Snake tools | 3-10s | ~$0.005 |
+
+### Overlay Models (v1.1.0 — monolith + matching)
+
+General-purpose extraction + factory-driven matching, optionally
+augmented with charles or concierge memory.
+
+| Shorthand | What it does | Memory |
+|-----------|--------------|--------|
+| `monolith` | Bedrock Sonnet + factory context (extract/describe) | — |
+| `matching` | Client ∥ article race, picks higher confidence | — |
+| `charles-monolith` | monolith + charles.aws memory prefix | charles |
+| `charles-matching` | matching + Haiku re-arbitration on memory | charles |
+| `concierge-monolith` | monolith + concierge.aws search results | concierge |
+| `concierge-matching` | matching + Haiku re-arbitration on memory | concierge |
+
+**Real benchmark** (prompt: `"44.2 rTherm"`, factory 4):
+- `matching`: 1.7s, snake_sat, **50% confidence**
+- `charles-matching`: 10s, 1185c memory, **95% via memory_arbitration**
+- `concierge-matching`: 4.3s, 1874c memory, **95% via memory_arbitration**
+
+Memory arbitration fires automatically when the primary match confidence
+is below 0.85 and a memory prefix exists. Haiku re-scores candidates
+using the recalled context.
+
+### Bedrock Passthrough (direct Converse)
+
+| Shorthand | Model | Tools | Vision | Latency |
+|-----------|-------|:---:|:---:|---------|
+| `sonnet` | Sonnet 4.6 | ✅ | ✅ | 1-3s |
+| `sonnet4` | Sonnet 4 | ✅ | ✅ | 2-4s |
+| `haiku` | Haiku 4.5 | ✅ | ✅ | 1-2s |
+| `nova-pro` | Nova Pro | — | ✅ | 0.8s |
+| `nova-lite` | Nova Lite | — | — | 0.7s |
+| `nova-micro` | Nova Micro | — | — | 0.6s |
 
 ## VLM — Image + Text In, JSON Out
 
@@ -115,6 +150,57 @@ c.vlm("describe", image=img_bytes)
 c("explain gravity", strategy="deep")  # charles + charles-science in parallel
 ```
 
+## Moncey — Glass Industry Sales Agent
+
+```python
+from monceai import Moncey
+
+Moncey("44.2 Silence/16 alu gris/4 rFloat JPP")
+# → "Bonjour, j'ai identifié: Feuilleté 44.2 + Intercalaire 16mm..."
+
+# Client mode — parallel futures
+m = Moncey()
+a = m("44.2 feuillete LowE 16mm")
+b = m("devis 20 vitrages")
+print(a)  # blocks on read
+```
+
+Pipeline: snake.aws/comprendre (deterministic glass decomp) &rarr;
+moncesuite.aws/comprendre (10 classifiers if quality < 75%) &rarr;
+Haiku synthesis. Default factory_id=3 (Monce).
+
+## Json — Structured Output (dict subclass)
+
+```python
+from monceai import Json
+
+Json("list 5 primes")              # → {"primes": [2, 3, 5, 7, 11]}
+Json('{"broken: json}')            # → fixes it
+Json("nom: Charles, age: 26")      # → {"nom": "Charles", "age": 26}
+
+j = Json("3 colors with hex")
+j["colors"]                        # list access
+print(j)                           # json.dumps(indent=2)
+```
+
+## Concierge — Monce Knowledge Base
+
+```python
+from monceai import Concierge
+
+Concierge("what's the accuracy for VIP today?")    # ask
+Concierge("VIP uses warm edge TPS noir as default") # teach
+
+# Memory management
+Concierge.remember("44.2 rTherm is standard for Riou")
+Concierge.search("rTherm")
+Concierge.forget("old pricing info")
+Concierge.digest()                                  # daily digest
+Concierge.kpi(days=7, factory_id=4)                 # KPIs
+```
+
+Backend: concierge.aws.monce.ai. Sonnet + memory + Snake tools + email signals.
+
 ## LLMSession — Persistent Chat
 
 ```python
@@ -129,35 +215,81 @@ r2 = s.send("what is my name?")   # remembers context
 
 ## Matching — Factory-Driven Field Reliability (v1.1.0)
 
-Overlay for extracted terms. Takes free text, a dict, or a single field value &mdash;
-returns canonical IDs with confidence. Wraps `claude.aws/stage_0` (client) and
-`snake.aws/query` (articles) through MonceApp's single auth surface.
+Overlay for extracted terms. **One call, auto-detects client vs article.**
+Wraps `claude.aws/stage_0` (client cascade) and `snake.aws/query`
+(article matching) — both raced in parallel, higher-confidence wins.
 
 ```python
 from monceai import Matching
 
-# Client matching — free text → ordering company
+# Auto-routing — no field= needed
 Matching("LGB Menuiserie SAS", factory_id=4)
-# → {"numero_client": "9232", "nom": "LGB MENUISERIE", "confidence": 0.98, ...}
+# → {"kind": "client", "numero_client": "9232", "nom": "LGB MENUISERIE",
+#    "confidence": 0.98, "method": "snake_exact", ...}
 
-# Article matching — per-field, per-factory
-Matching("44.2 rTherm", field="verre", factory_id=4)
-# → {"num_article": "63442", "denomination": "44.2 rTherm", "confidence": 1.0}
+Matching("44.2 rTherm", factory_id=4)
+# → {"kind": "article", "num_article": "63442",
+#    "denomination": "44.2 rTherm", "confidence": 1.0, ...}
+
+# Explicit field= override (per-field article matching)
+Matching("44.2", field="verre", factory_id=4)
+# → {"num_article": "63442", "denomination": "44.2", "confidence": 1.0}
 
 # JSON overlay — preserves extra fields, enriches client block
 Matching({"nom": "LGB", "qty": 50, "adresse": "Lyon"}, factory_id=4)
-# → {"nom": "LGB", "qty": 50, "adresse": "Lyon", "numero_client": "9232", "match_confidence": 1.0}
+# → {"nom": "LGB", "qty": 50, "adresse": "Lyon",
+#    "numero_client": "9232", "match_confidence": 1.0}
 
 # Batch
 Matching(["LGB", "ACTIF PVC", "VME"], factory_id=4)
 
 # Reusable client — parallel futures (Charles/Moncey style)
 m = Matching(factory_id=4)
-a = m("LGB"); b = m("44.2 rTherm", field="verre")
+a = m("LGB"); b = m("44.2 rTherm")
 print(a.get("numero_client"))  # blocks on read
 ```
 
-Article fields: `verre`, `intercalaire`, `remplissage`, `faconnage` (+ suffixed variants).
+### Production benchmark (50 real clients + 50 real articles)
+
+Pulled from `VIP_Clients_Unique.xlsx` / `VIP_Articles_Unique.xlsx`:
+
+| | Routing | Matches |
+|---|---|---|
+| Clients | 50/50 (100%) | 50/50 (100%) |
+| Articles | 20/50 (40%) | 20/50 (40%) |
+
+Article misses are catalog coverage (snake hasn't seen the item), not
+routing bugs. Zero client→article misroutes. One article→client misroute
+(`"PRBLOC"` matched a client with that name).
+
+Article fields for explicit `field=`: `verre`, `verre1`, `verre2`, `verre3`,
+`intercalaire`, `intercalaire1`, `intercalaire2`, `remplissage`, `gaz`,
+`faconnage`, `façonnage_arete`, `global`.
+
+## Monolith Chat Models (v1.1.0)
+
+Same `LLM()` / `LLMSession()` API — just point at the named model.
+MonceApp wires factory context + memory retrieval automatically.
+
+```python
+from monceai import LLM
+
+# General extraction via Sonnet + factory context
+LLM("extract fields from this order", model="monolith", factory_id=4,
+    image=pdf_page_bytes)
+
+# Memory-augmented: charles.aws memory feeds the extraction
+LLM("what is rTherm?", model="charles-monolith")
+
+# Memory-augmented: concierge.aws search results feed the extraction
+LLM("what is rTherm?", model="concierge-monolith")
+# → answer uses remembered corrections + alias mappings
+```
+
+Chat-mode access (live on `/v1/chat`):
+- `/monolith`, `/matching`
+- `/charles-monolith`, `/charles-matching`
+- `/concierge-monolith`, `/concierge-matching`
 
 ## Calc — Exact NP Arithmetic (v1.1.0)
 

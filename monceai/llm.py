@@ -939,37 +939,73 @@ class Matching(dict):
         body = _matching_call(payload, endpoint=ep, timeout=timeout)
         elapsed = int((time.time() - t) * 1000)
 
+        # Server may return:
+        # - legacy client-only: {client_matching, candidates, ...}
+        # - dual-mode auto race: {winner, client_matching, article_match, ...}
+        winner = body.get("winner")  # None, "client", "article"
         cm = body.get("client_matching") or {}
+        am = body.get("article_match") or {}
+
         if isinstance(arg, str):
-            self.update({
-                "parsed": body.get("parsed") or {},
-                "numero_client": cm.get("numero_client"),
-                "nom": cm.get("nom"),
-                "confidence": cm.get("confidence"),
-                "method": cm.get("method"),
-                "source": cm.get("source"),
-            })
+            if winner == "article":
+                self.update({
+                    "parsed": body.get("parsed") or {},
+                    "query": arg,
+                    "kind": "article",
+                    "num_article": am.get("num_article"),
+                    "denomination": am.get("denomination"),
+                    "confidence": am.get("confidence"),
+                    "method": am.get("method"),
+                })
+                model_tag = "matching.auto.article"
+                text_out = am.get("denomination") or ""
+            elif winner == "client" or cm.get("numero_client"):
+                self.update({
+                    "parsed": body.get("parsed") or {},
+                    "kind": "client",
+                    "numero_client": cm.get("numero_client"),
+                    "nom": cm.get("nom"),
+                    "confidence": cm.get("confidence"),
+                    "method": cm.get("method"),
+                    "source": cm.get("source"),
+                })
+                model_tag = "matching.auto.client"
+                text_out = cm.get("nom") or ""
+            else:
+                # Neither matched — surface candidates
+                self.update({
+                    "parsed": body.get("parsed") or {},
+                    "kind": None,
+                    "numero_client": None, "num_article": None,
+                    "confidence": 0.0,
+                })
+                model_tag = "matching.auto.none"
+                text_out = ""
         else:
             # dict-overlay: inject match results on top of caller dict
             if cm.get("numero_client"):
                 self["numero_client"] = cm.get("numero_client")
             if cm.get("confidence") is not None:
                 self["match_confidence"] = cm.get("confidence")
+            model_tag = "matching.client"
+            text_out = cm.get("nom") or ""
 
         self.result = LLMResult(
-            text=cm.get("nom") or "",
-            model="matching.client",
+            text=text_out,
+            model=model_tag,
             elapsed_ms=elapsed,
             sat_memory={
-                "method": cm.get("method"),
-                "source": cm.get("source"),
+                "winner": winner,
+                "client_match": cm or None,
+                "article_match": am or None,
+                "client_confidence": body.get("client_confidence"),
+                "article_confidence": body.get("article_confidence"),
                 "factory_id": factory_id,
                 "candidates": body.get("candidates", {}),
-                "resolution": (body.get("metadata") or {}).get("resolution"),
             },
             raw=body,
         )
-        _report_usage(ep, f"match:client:{str(arg)[:60]}", self.result)
+        _report_usage(ep, f"match:auto:{str(arg)[:60]}", self.result)
 
     def __repr__(self):
         return _json.dumps(dict(self), ensure_ascii=False, indent=2)
