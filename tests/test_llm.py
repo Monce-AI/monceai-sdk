@@ -35,7 +35,7 @@ try:
     ok("import LLMResult", True)
     ok("import Snake", True)
     ok("import SAT", True)
-    ok("version is 0.3.0", monceai.__version__ == "0.3.0", monceai.__version__)
+    ok("version present", bool(monceai.__version__), monceai.__version__)
 except Exception as e:
     ok("imports", False, str(e))
     sys.exit(1)

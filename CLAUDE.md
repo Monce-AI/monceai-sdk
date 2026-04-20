@@ -1,4 +1,4 @@
-# monceai SDK v1.0.0 — Guide for Claude
+# monceai SDK v1.1.0 — Guide for Claude
 
 Repo: `Monce-AI/monceai-sdk` (public)
 Backend: `monceapp.aws.monce.ai` (EC2 t3.small, 8 workers, 100 concurrent)
@@ -13,8 +13,10 @@ pip install git+https://github.com/Monce-AI/monceai-sdk.git
 
 ```
 monceai/
-  __init__.py       # Exports: Charles, Moncey, Json, LLM, VLM, LLMSession, LLMResult, Snake, SAT
-  llm.py            # Charles, Moncey, Json, LLM, VLM, LLMSession (FREE, no auth)
+  __init__.py       # Exports: Charles, Moncey, Json, LLM, VLM, LLMSession, LLMResult,
+                    #          Matching, Calc, Diff, Concierge, Snake, SAT
+  llm.py            # Charles, Moncey, Json, LLM, VLM, LLMSession, Matching, Calc, Diff,
+                    #   Concierge (FREE, no auth — all MonceApp-backed)
   snake.py          # Cloud Snake classifier (SNAKE_API_KEY required)
   sat.py            # SAT solver cloud + local (SAT_API_KEY required)
   report.py         # Audit report ZIP generator
@@ -130,6 +132,73 @@ from monceai import VLM
 
 VLM("describe", image=open("photo.png", "rb").read())
 ```
+
+### Matching — factory-driven field matching (v1.1.0)
+
+Reliability overlay: takes extracted terms, returns canonical IDs.
+Two modes — client (via `claude.aws/stage_0`) or article (via `snake.aws/query`),
+both funneled through MonceApp's `/v1/matching` endpoint.
+
+```python
+from monceai import Matching
+
+# Client matching — free text, identifies the ordering company
+Matching("LGB Menuiserie SAS", factory_id=4)
+# → {"numero_client": "9232", "nom": "LGB MENUISERIE", "confidence": 0.98, "method": "snake_exact", ...}
+
+# Article matching — verre / intercalaire / remplissage / faconnage
+Matching("44.2 rTherm", field="verre", factory_id=4)
+# → {"num_article": "63442", "denomination": "44.2 rTherm", "confidence": 1.0}
+
+# Dict overlay — preserves extra fields, enriches client block in-place
+Matching({"nom": "LGB", "qty": 50, "adresse": "Lyon"}, factory_id=4)
+# → {"nom": "LGB", "qty": 50, "adresse": "Lyon", "numero_client": "9232", "match_confidence": 1.0}
+
+# Batch — returns list[Matching]
+Matching(["LGB", "ACTIF PVC", "VME"], factory_id=4)
+
+# Client mode — reusable, fires parallel futures (like Charles/Moncey)
+m = Matching(factory_id=4)
+a = m("LGB")                                  # future
+b = m("44.2 rTherm", field="verre")           # future
+print(a.get("numero_client"))                 # blocks on read
+```
+
+Matching is a `dict` subclass. `.result` carries `LLMResult` metadata
+(elapsed_ms, sat_memory with method/source/candidates).
+
+Article fields: `verre`, `verre1`, `verre2`, `verre3`, `intercalaire`,
+`intercalaire1`, `intercalaire2`, `remplissage`, `gaz`, `faconnage`,
+`façonnage_arete`, `global`.
+
+### Calc — exact NP arithmetic (v1.1.0)
+
+```python
+from monceai import Calc
+
+Calc("123x3456")          # → "425088"
+Calc("100/3")             # → "33.333333"
+Calc("1000000x1000000")   # → "1000000000000"
+float(Calc("44.2 * 1000"))  # → 44200.0
+```
+
+`Calc` is a `str` subclass. Operators: `x * / % + -`. Decimal-backed,
+multiplication is poly-time to verify, NP-hard to invert (factoring).
+
+### Diff — raw vs monceai-enhanced, side by side (v1.1.0)
+
+```python
+from monceai import Diff
+
+d = Diff("Quel intercalaire pour 44.2 rTherm?", factory_id=4)
+d.raw_text              # what the bare model says (often wrong)
+d.enhanced_text         # what monceai-enhanced says (factory-correct)
+d.context_tokens_added  # int — cost of enhancement
+print(d.report())       # formatted side-by-side
+```
+
+Use this to show stakeholders the value of the `(monceai-)` context layer.
+`Diff` is a `dict` subclass — the full JSON response is accessible as a dict.
 
 ### LLMSession — persistent chat
 

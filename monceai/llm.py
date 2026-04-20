@@ -783,3 +783,427 @@ class _ConciergeClient:
 
     def __repr__(self):
         return f'Concierge(endpoint={self._endpoint!r})'
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Matching — factory-driven field matching (overlay for extracted terms)
+# ═══════════════════════════════════════════════════════════════════════════
+
+CLIENT_FIELDS = (
+    "nom", "logo_text", "raison_social", "siret_siren",
+    "email", "adresse", "telephone", "numero_client",
+)
+
+ARTICLE_FIELDS = (
+    "verre", "verre1", "verre2", "verre3",
+    "intercalaire", "intercalaire1", "intercalaire2",
+    "remplissage", "gaz",
+    "faconnage", "façonnage_arete",
+    "global",
+)
+
+
+def _matching_call(payload: dict, endpoint: str = None, timeout: int = 30) -> dict:
+    """POST /v1/matching with a JSON body. Returns the response dict."""
+    url = f"{(endpoint or DEFAULT_ENDPOINT).rstrip('/')}/v1/matching"
+    try:
+        resp = requests.post(url, json=payload, timeout=timeout)
+        if resp.status_code != 200:
+            return {"error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"error": "timeout"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+class Matching(dict):
+    """
+    Factory-driven field matching — reliability overlay for extracted terms.
+
+        # Client matching — parses free text, identifies the client
+        Matching("LGB Menuiserie SAS", factory_id=4)
+        # → {"numero_client": "9232", "nom": "LGB MENUISERIE", "confidence": 0.98, ...}
+
+        # Article matching — match a single extracted value against snake.aws
+        Matching("44.2 rTherm", field="verre", factory_id=4)
+        # → {"num_article": "63442", "denomination": "44.2 rTherm", "confidence": 1.0}
+
+        # Dict overlay — preserves passthrough fields, enriches client block
+        Matching({"nom": "ARC ALU", "qty": 50}, factory_id=4)
+        # → {"nom": "ARC ALU", "qty": 50, "numero_client": "..."}
+
+        # Client mode — reusable, fires parallel futures
+        m = Matching(factory_id=4)
+        a = m("LGB")
+        b = m("44.2 rTherm", field="verre")
+        print(a.get("numero_client"))
+
+    The instance IS a dict. Indexing, `**unpack`, `json.dumps` — all work.
+    `.result` attribute carries full metadata (`LLMResult`-shaped).
+    """
+
+    _CLIENT_FIELDS = CLIENT_FIELDS
+    _ARTICLE_FIELDS = ARTICLE_FIELDS
+
+    def __new__(cls, arg=None, factory_id: int = 3, field: str = None,
+                endpoint: str = None, timeout: int = 30):
+        # No arg → reusable client
+        if arg is None:
+            client = object.__new__(_MatchingClient)
+            client._endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+            client._factory_id = factory_id
+            client._timeout = timeout
+            return client
+        # batch list — return list of Matching
+        if isinstance(arg, (list, tuple)):
+            return [cls(item, factory_id=factory_id, field=field,
+                        endpoint=endpoint, timeout=timeout) for item in arg]
+        return super().__new__(cls)
+
+    def __init__(self, arg=None, factory_id: int = 3, field: str = None,
+                 endpoint: str = None, timeout: int = 30):
+        super().__init__()
+        if arg is None or isinstance(arg, (list, tuple)):
+            # _MatchingClient path, or batch path — already handled in __new__
+            self.result = LLMResult()
+            return
+
+        ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+        self._factory_id = factory_id
+        self._field = field
+
+        # Article mode
+        if field is not None:
+            if field not in self._ARTICLE_FIELDS:
+                raise ValueError(
+                    f"Matching: unknown field {field!r}. "
+                    f"Allowed: {self._ARTICLE_FIELDS}"
+                )
+            if not isinstance(arg, str):
+                raise TypeError(
+                    f"Matching: article mode requires a string query, got {type(arg).__name__}"
+                )
+            t = time.time()
+            body = _matching_call(
+                {"query": arg, "field": field, "factory_id": factory_id},
+                endpoint=ep, timeout=timeout,
+            )
+            elapsed = int((time.time() - t) * 1000)
+            self.update({
+                "query": arg,
+                "field": field,
+                "num_article": body.get("num_article"),
+                "denomination": body.get("denomination"),
+                "confidence": body.get("confidence"),
+                "method": body.get("method"),
+                "candidates": body.get("candidates", []),
+            })
+            self.result = LLMResult(
+                text=body.get("denomination") or "",
+                model="matching.article",
+                elapsed_ms=elapsed,
+                sat_memory={"field": field, "factory_id": factory_id,
+                            "method": body.get("method")},
+                raw=body,
+            )
+            _report_usage(ep, f"match:{field}:{arg}", self.result)
+            return
+
+        # Client mode — route by input type
+        if isinstance(arg, str):
+            payload = {"text": arg, "factory_id": factory_id}
+        elif isinstance(arg, dict):
+            # Extract known client fields; also preserve the full dict as base
+            cleaned = {k: v for k, v in arg.items()
+                       if k in self._CLIENT_FIELDS and v}
+            if cleaned:
+                payload = {"fields": cleaned, "factory_id": factory_id}
+            else:
+                payload = None
+            # overlay: start with the caller's dict, enrich with match below
+            self.update(arg)
+        else:
+            raise TypeError(
+                f"Matching: unsupported input type {type(arg).__name__}"
+            )
+
+        if isinstance(arg, dict) and payload is None:
+            self.result = LLMResult(
+                text="", model="matching.client",
+                sat_memory={"reason": "no_client_fields_in_dict"},
+            )
+            return
+
+        t = time.time()
+        body = _matching_call(payload, endpoint=ep, timeout=timeout)
+        elapsed = int((time.time() - t) * 1000)
+
+        cm = body.get("client_matching") or {}
+        if isinstance(arg, str):
+            self.update({
+                "parsed": body.get("parsed") or {},
+                "numero_client": cm.get("numero_client"),
+                "nom": cm.get("nom"),
+                "confidence": cm.get("confidence"),
+                "method": cm.get("method"),
+                "source": cm.get("source"),
+            })
+        else:
+            # dict-overlay: inject match results on top of caller dict
+            if cm.get("numero_client"):
+                self["numero_client"] = cm.get("numero_client")
+            if cm.get("confidence") is not None:
+                self["match_confidence"] = cm.get("confidence")
+
+        self.result = LLMResult(
+            text=cm.get("nom") or "",
+            model="matching.client",
+            elapsed_ms=elapsed,
+            sat_memory={
+                "method": cm.get("method"),
+                "source": cm.get("source"),
+                "factory_id": factory_id,
+                "candidates": body.get("candidates", {}),
+                "resolution": (body.get("metadata") or {}).get("resolution"),
+            },
+            raw=body,
+        )
+        _report_usage(ep, f"match:client:{str(arg)[:60]}", self.result)
+
+    def __repr__(self):
+        return _json.dumps(dict(self), ensure_ascii=False, indent=2)
+
+    def __str__(self):
+        return _json.dumps(dict(self), ensure_ascii=False, indent=2)
+
+
+class _MatchingFuture:
+    """Lazy future for Matching client mode. Acts as dict on resolve."""
+
+    def __init__(self, arg, endpoint, factory_id, field, timeout):
+        import threading
+        self._arg = arg
+        self._field = field
+        self._data = None
+        self._result = None
+        self._done = threading.Event()
+
+        def _compute():
+            m = Matching(arg, factory_id=factory_id, field=field,
+                         endpoint=endpoint, timeout=timeout)
+            self._data = dict(m)
+            self._result = getattr(m, "result", None)
+            self._done.set()
+
+        threading.Thread(target=_compute, daemon=True).start()
+
+    @property
+    def result(self):
+        self._done.wait()
+        return self._result
+
+    def _block(self):
+        self._done.wait()
+        return self._data
+
+    # dict interface — each blocks
+    def __getitem__(self, key): return self._block()[key]
+    def __contains__(self, key): return key in self._block()
+    def __iter__(self): return iter(self._block())
+    def __len__(self): return len(self._block())
+    def keys(self): return self._block().keys()
+    def values(self): return self._block().values()
+    def items(self): return self._block().items()
+    def get(self, key, default=None): return self._block().get(key, default)
+
+    def __str__(self):
+        return _json.dumps(self._block(), ensure_ascii=False, indent=2)
+
+    def __repr__(self):
+        if self._done.is_set():
+            return str(self)
+        return f'[matching {str(self._arg)[:30]}...]'
+
+
+class _MatchingClient:
+    """Reusable Matching client, returned by Matching() with no args."""
+
+    def __call__(self, arg, field: str = None, **kw):
+        return _MatchingFuture(
+            arg, self._endpoint,
+            kw.get("factory_id", self._factory_id),
+            field,
+            kw.get("timeout", self._timeout),
+        )
+
+    def __repr__(self):
+        return f'Matching(endpoint={self._endpoint!r}, factory_id={self._factory_id})'
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Calc — exact NP arithmetic via /v1/calc (str subclass, blocks)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _calc_call(expression: str, endpoint: str = None, timeout: int = 10) -> dict:
+    url = f"{(endpoint or DEFAULT_ENDPOINT).rstrip('/')}/v1/calc"
+    try:
+        resp = requests.post(url, json={"expression": expression}, timeout=timeout)
+        if resp.status_code != 200:
+            return {"error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+        return resp.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+class Calc(str):
+    """
+    Exact Decimal arithmetic. str subclass — the instance IS the result.
+
+        Calc("123x3456")           # → "425088"
+        Calc("100/3")              # → "33.333333"
+        float(Calc("44.2*1000"))   # → 44200.0
+        Calc("1000000x1000000")    # → "1000000000000"
+
+    Operators: x * / % + -. Decimal-backed — multiplication is poly-time
+    to verify, NP-hard to invert (factoring).
+    """
+
+    def __new__(cls, expression: str, endpoint: str = None, timeout: int = 10):
+        if not isinstance(expression, str):
+            raise TypeError(f"Calc: expression must be str, got {type(expression).__name__}")
+
+        ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+        t = time.time()
+        body = _calc_call(expression, endpoint=ep, timeout=timeout)
+        elapsed = int((time.time() - t) * 1000)
+
+        text = str(body.get("result", "") or "")
+        instance = super().__new__(cls, text)
+        instance.expression = expression
+        instance.result = LLMResult(
+            text=text,
+            model="calc",
+            elapsed_ms=elapsed,
+            sat_memory={"method": body.get("method"), "expression": expression},
+            raw=body,
+        )
+        _report_usage(ep, f"calc:{expression}", instance.result)
+        return instance
+
+    def __float__(self):
+        return float(str(self))
+
+    def __int__(self):
+        return int(float(str(self)))
+
+    def __repr__(self):
+        return f'Calc({self.expression!r} = {str(self)!r})'
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Diff — raw vs monceai-enhanced side by side (dict subclass, blocks)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _diff_call(prompt: str, model_id: str = "haiku", factory_id: int = 0,
+               framework_id: str = "glass", endpoint: str = None,
+               timeout: int = 120) -> dict:
+    url = f"{(endpoint or DEFAULT_ENDPOINT).rstrip('/')}/v1/diff"
+    try:
+        resp = requests.post(
+            url,
+            json={
+                "prompt": prompt,
+                "model_id": _resolve_model(model_id),
+                "factory_id": factory_id,
+                "framework_id": framework_id,
+            },
+            timeout=timeout,
+        )
+        if resp.status_code != 200:
+            return {"error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+        return resp.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+class Diff(dict):
+    """
+    Compare the same prompt raw vs monceai-enhanced side by side.
+
+        d = Diff("Quel intercalaire pour 44.2 rTherm?", factory_id=4)
+        d["raw"]["response"]           # generic model answer
+        d["enhanced"]["response"]      # factory-specific answer
+        d.raw_text                     # shortcut
+        d.enhanced_text                # shortcut
+        d.context_tokens_added         # int
+        print(d.report())              # formatted side-by-side
+
+    The instance IS a dict. Prints pretty JSON.
+    """
+
+    def __new__(cls, prompt: str, model: str = "haiku", factory_id: int = 0,
+                framework_id: str = "glass", endpoint: str = None,
+                timeout: int = 120):
+        return super().__new__(cls)
+
+    def __init__(self, prompt: str, model: str = "haiku", factory_id: int = 0,
+                 framework_id: str = "glass", endpoint: str = None,
+                 timeout: int = 120):
+        super().__init__()
+        ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+        t = time.time()
+        body = _diff_call(prompt, model_id=model, factory_id=factory_id,
+                          framework_id=framework_id, endpoint=ep, timeout=timeout)
+        elapsed = int((time.time() - t) * 1000)
+        self.update(body)
+        diff_meta = body.get("diff", {}) or {}
+        self.prompt = prompt
+        self.result = LLMResult(
+            text=(body.get("enhanced") or {}).get("response", ""),
+            model=f"diff/{_resolve_model(model)}",
+            elapsed_ms=elapsed,
+            sat_memory={
+                "context_tokens_added": diff_meta.get("context_tokens_added", 0),
+                "raw_tokens": diff_meta.get("raw_tokens", 0),
+                "enhanced_tokens": diff_meta.get("enhanced_tokens", 0),
+                "factory_id": factory_id,
+            },
+            raw=body,
+        )
+        _report_usage(ep, f"diff:{prompt[:60]}", self.result)
+
+    @property
+    def raw_text(self) -> str:
+        return (self.get("raw") or {}).get("response", "")
+
+    @property
+    def enhanced_text(self) -> str:
+        return (self.get("enhanced") or {}).get("response", "")
+
+    @property
+    def context_tokens_added(self) -> int:
+        return (self.get("diff") or {}).get("context_tokens_added", 0)
+
+    def report(self) -> str:
+        """Side-by-side formatted report."""
+        lines = [
+            "═" * 72,
+            f"PROMPT: {self.prompt}",
+            "─" * 72,
+            "RAW (no monceai context):",
+            self.raw_text,
+            "─" * 72,
+            "ENHANCED (monceai-):",
+            self.enhanced_text,
+            "─" * 72,
+            f"Context tokens added: {self.context_tokens_added}",
+            "═" * 72,
+        ]
+        return "\n".join(lines)
+
+    def __str__(self):
+        return _json.dumps(dict(self), ensure_ascii=False, indent=2)
+
+    def __repr__(self):
+        return f'Diff(prompt={self.prompt!r}, context_tokens_added={self.context_tokens_added})'

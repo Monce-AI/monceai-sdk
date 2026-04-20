@@ -1,12 +1,16 @@
 # monceai
 
 [![PyPI](https://img.shields.io/badge/pip%20install-monceai-3776AB?logo=python&logoColor=white)](https://github.com/Monce-AI/monceai-sdk)
+[![Version](https://img.shields.io/badge/version-v1.1.0-5b2a8e)](https://github.com/Monce-AI/monceai-sdk/releases)
 [![Snake v5.4.5](https://img.shields.io/badge/Snake-v5.4.5-black)](https://github.com/Monce-AI/algorithmeai-snake)
 [![AWS Lambda](https://img.shields.io/badge/backend-AWS%20Lambda-FF9900?logo=awslambda&logoColor=white)](https://snakebatch.aws.monce.ai)
+[![AWS Bedrock](https://img.shields.io/badge/AWS-Bedrock-ff9900?logo=amazonaws&logoColor=white)](https://aws.amazon.com/bedrock/)
+[![MonceApp](https://img.shields.io/badge/MonceApp-live-22c55e)](https://monceapp.aws.monce.ai)
+[![Tests](https://img.shields.io/badge/tests-live-22c55e)](tests/)
 [![License](https://img.shields.io/badge/license-proprietary-red)](LICENSE)
 [![Monce SAS](https://img.shields.io/badge/Monce-SAS-blue)](https://monce.ai)
 
-**LLM, VLM, Snake classifier, SAT solver. One SDK, zero config for chat.**
+**LLM, VLM, Snake classifier, SAT solver — plus Matching, Calc, Diff. One SDK, zero config for chat.**
 
 ```python
 from monceai import Charles
@@ -120,6 +124,67 @@ s = LLMSession(model="charles")
 r1 = s.send("my name is Charles")
 r2 = s.send("what is my name?")   # remembers context
 ```
+
+---
+
+## Matching — Factory-Driven Field Reliability (v1.1.0)
+
+Overlay for extracted terms. Takes free text, a dict, or a single field value &mdash;
+returns canonical IDs with confidence. Wraps `claude.aws/stage_0` (client) and
+`snake.aws/query` (articles) through MonceApp's single auth surface.
+
+```python
+from monceai import Matching
+
+# Client matching — free text → ordering company
+Matching("LGB Menuiserie SAS", factory_id=4)
+# → {"numero_client": "9232", "nom": "LGB MENUISERIE", "confidence": 0.98, ...}
+
+# Article matching — per-field, per-factory
+Matching("44.2 rTherm", field="verre", factory_id=4)
+# → {"num_article": "63442", "denomination": "44.2 rTherm", "confidence": 1.0}
+
+# JSON overlay — preserves extra fields, enriches client block
+Matching({"nom": "LGB", "qty": 50, "adresse": "Lyon"}, factory_id=4)
+# → {"nom": "LGB", "qty": 50, "adresse": "Lyon", "numero_client": "9232", "match_confidence": 1.0}
+
+# Batch
+Matching(["LGB", "ACTIF PVC", "VME"], factory_id=4)
+
+# Reusable client — parallel futures (Charles/Moncey style)
+m = Matching(factory_id=4)
+a = m("LGB"); b = m("44.2 rTherm", field="verre")
+print(a.get("numero_client"))  # blocks on read
+```
+
+Article fields: `verre`, `intercalaire`, `remplissage`, `faconnage` (+ suffixed variants).
+
+## Calc — Exact NP Arithmetic (v1.1.0)
+
+```python
+from monceai import Calc
+
+Calc("123x3456")            # → "425088"
+Calc("1000000x1000000")     # → "1000000000000"
+float(Calc("44.2 * 1000"))  # → 44200.0
+```
+
+`Calc` is a `str` subclass &mdash; the instance IS the result. Decimal-backed,
+exact. Operators: `x * / % + -`.
+
+## Diff — Raw vs Enhanced (v1.1.0)
+
+```python
+from monceai import Diff
+
+d = Diff("Quel intercalaire pour 44.2 rTherm?", factory_id=4)
+d.raw_text                # generic model answer (often wrong)
+d.enhanced_text           # monceai-enhanced answer (factory-correct)
+d.context_tokens_added    # cost of enhancement
+print(d.report())         # formatted side-by-side
+```
+
+Perfect for proving the value of `(monceai-)` context to stakeholders.
 
 ---
 
