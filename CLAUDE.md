@@ -84,6 +84,11 @@ from monceai import Json
 Json("list 5 primes")              # → {"primes": [2, 3, 5, 7, 11]}
 Json('{"broken: json}')            # → fixes it
 Json("nom: Charles, age: 26")      # → {"nom": "Charles", "age": 26}
+
+# v1.2.1 — file=path/Path/bytes/file-like, any doctype
+Json("extract the order", file="order.txt")     # text inlined
+Json("list items", file="quote.pdf")            # binary multipart
+Json("parse", file=open("items.csv", "rb"))     # file-like
 ```
 
 Json is a `dict` subclass + lazy future. Resolves on any dict access.
@@ -96,7 +101,11 @@ print(j)            # json.dumps(indent=2)
 str(j)              # json.dumps(indent=2)
 ```
 
-Backend: charles-json (Sonnet strict JSON output).
+Backend: charles-json (Sonnet strict JSON output). v1.2.1 unified `file=`
+argument across Json/LLM/VLM/Charles/LLMSession: text-like files
+(.txt/.json/.csv/.md/.ndjson/…) are inlined into the prompt so the
+chat endpoint — which only accepts binary multipart — still sees them;
+binaries (.pdf/.png/.docx/…) go multipart.
 
 ### Chaining — constructors compose via `+`
 

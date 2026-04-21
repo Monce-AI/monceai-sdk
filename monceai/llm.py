@@ -21,13 +21,118 @@ spin Lambda workers. LLM/VLM/Charles are free — Bedrock costs are on us.
 """
 
 import base64
+import io
 import json as _json
+import mimetypes
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import requests
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Unified input coercion — path / Path / bytes / file-like → either
+# (a) inline text for the prompt, or (b) multipart binary upload.
+# ─────────────────────────────────────────────────────────────────────
+
+# Extensions we inline as text alongside the prompt. Everything else is
+# treated as binary and goes out via multipart.
+_TEXT_EXTS = {
+    ".txt", ".md", ".rst", ".log",
+    ".json", ".jsonl", ".ndjson",
+    ".csv", ".tsv",
+    ".xml", ".html", ".htm", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".c", ".h",
+    ".cpp", ".hpp", ".java", ".kt", ".rb", ".sh", ".sql", ".css", ".scss",
+}
+
+
+def _guess_content_type(name: str) -> str:
+    ext = os.path.splitext(name)[1].lower()
+    table = {
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".webp": "image/webp", ".tif": "image/tiff", ".tiff": "image/tiff",
+        ".gif": "image/gif", ".bmp": "image/bmp",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xls": "application/vnd.ms-excel",
+        ".msg": "application/vnd.ms-outlook",
+        ".eml": "message/rfc822",
+    }
+    if ext in table:
+        return table[ext]
+    ct, _ = mimetypes.guess_type(name)
+    return ct or "application/octet-stream"
+
+
+def _coerce_input(
+    source: Any,
+    filename: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[Tuple[str, bytes, str]]]:
+    """Turn any user-supplied input into either inline text or a multipart tuple.
+
+    Returns ``(inline_text, multipart)``. Exactly one will be non-None.
+
+    Accepts:
+        - ``str`` path to an existing file
+        - ``pathlib.Path``
+        - ``bytes`` / ``bytearray`` (must pass ``filename=`` for type sniffing,
+          else we treat as a binary blob with a generic name)
+        - file-like with ``.read()``
+    """
+    # file-like (supports .read()) — read it out first
+    if hasattr(source, "read") and callable(source.read):
+        data = source.read()
+        name = filename or getattr(source, "name", None) or "upload.bin"
+        name = os.path.basename(str(name))
+        source = data  # fall through to bytes branch
+        filename = name
+
+    if isinstance(source, (bytes, bytearray)):
+        data = bytes(source)
+        name = filename or "upload.bin"
+        ct = _guess_content_type(name)
+        # Any declared text type, or no extension + valid utf-8 → inline
+        ext = os.path.splitext(name)[1].lower()
+        if ext in _TEXT_EXTS or ct.startswith("text/"):
+            try:
+                return data.decode("utf-8"), None
+            except UnicodeDecodeError:
+                pass
+        return None, (name, data, ct)
+
+    if isinstance(source, (str, os.PathLike)) and not isinstance(source, bytes):
+        # Treat as a filesystem path. If the string isn't actually a path,
+        # caller should have passed it as the prompt — we only reach this
+        # helper when a file-ish argument is provided.
+        path = Path(os.fspath(source))
+        if not path.exists():
+            raise FileNotFoundError(f"file not found: {path}")
+        name = filename or path.name
+        ext = path.suffix.lower()
+        ct = _guess_content_type(name)
+        if ext in _TEXT_EXTS or ct.startswith("text/"):
+            try:
+                return path.read_text(encoding="utf-8"), None
+            except UnicodeDecodeError:
+                pass  # fall through to binary
+        return None, (name, path.read_bytes(), ct)
+
+    raise TypeError(
+        f"unsupported file input: {type(source).__name__} "
+        f"(expected path, Path, bytes, or file-like)"
+    )
+
+
+def _inline_file_prompt(prompt: str, text: str, filename: Optional[str]) -> str:
+    """Wrap inlined file content under a clear delimiter in the prompt."""
+    header = f"[file: {filename}]" if filename else "[file]"
+    return f"{prompt}\n\n{header}\n{text}"
 
 
 _usage_queue = []
@@ -145,12 +250,14 @@ class LLMSession:
             self._http.headers["Authorization"] = f"Bearer {self.api_key}"
 
     def send(self, text: str, image: bytes = None, image_type: str = "image/png",
+             file: Any = None, filename: Optional[str] = None,
              timeout: int = 120) -> LLMResult:
         return _chat(
             text=text, image=image, image_type=image_type,
             model=self.model, factory_id=self.factory_id,
             session_id=self.session_id, endpoint=self.endpoint,
             session=self._http, timeout=timeout,
+            file=file, filename=filename,
         )
 
     def __repr__(self):
@@ -161,10 +268,30 @@ def _chat(text: str, image: bytes = None, image_type: str = "image/png",
           model: str = "charles-science", factory_id: int = 0,
           session_id: str = "", endpoint: str = None,
           session: requests.Session = None, timeout: int = 120,
-          as_json: bool = False) -> LLMResult:
+          as_json: bool = False,
+          file: Any = None, filename: Optional[str] = None) -> LLMResult:
 
     url = f"{(endpoint or DEFAULT_ENDPOINT).rstrip('/')}/v1/chat"
     http = session or requests.Session()
+
+    # Unified file handling: path / Path / bytes / file-like. Text-like
+    # payloads (.txt, .json, .csv, ...) are inlined into the prompt so
+    # the backend — which only accepts binary multipart — still sees them.
+    # Binary payloads (.pdf, .png, .docx, ...) go out as multipart.
+    if file is not None:
+        display_name = filename
+        if display_name is None:
+            if isinstance(file, (str, os.PathLike)):
+                display_name = os.path.basename(os.fspath(file))
+            elif hasattr(file, "name"):
+                display_name = os.path.basename(str(file.name))
+        inline_text, multipart = _coerce_input(file, filename=filename)
+        if inline_text is not None:
+            text = _inline_file_prompt(text or "", inline_text, display_name)
+        elif multipart is not None:
+            image = multipart[1]
+            image_type = multipart[2]
+            filename = multipart[0]
 
     data = {"model_id": model, "message": text}
     if factory_id:
@@ -174,8 +301,8 @@ def _chat(text: str, image: bytes = None, image_type: str = "image/png",
 
     files = {}
     if image:
-        ext = image_type.split("/")[-1]
-        files["file"] = (f"image.{ext}", image, image_type)
+        name = filename or f"image.{image_type.split('/')[-1]}"
+        files["file"] = (name, image, image_type)
 
     t = time.time()
     try:
@@ -214,6 +341,7 @@ def _chat(text: str, image: bytes = None, image_type: str = "image/png",
 
 def LLM(prompt: str, model: str = "charles-science", image: bytes = None,
          image_type: str = "image/png", json: bool = False,
+         file: Any = None, filename: Optional[str] = None,
          factory_id: int = 0, endpoint: str = None, timeout: int = 120) -> LLMResult:
     """
     One-shot LLM/VLM call. Text in, answer out.
@@ -257,6 +385,7 @@ def LLM(prompt: str, model: str = "charles-science", image: bytes = None,
         text=prompt, image=image, image_type=image_type,
         model=resolved, factory_id=factory_id,
         endpoint=endpoint, timeout=timeout, as_json=json,
+        file=file, filename=filename,
     )
 
 
@@ -288,7 +417,8 @@ class Charles(str):
     }
 
     def __new__(cls, prompt: str = None, image: bytes = None, image_type: str = "image/png",
-                strategy: str = None, factory_id: int = 0, endpoint: str = None, timeout: int = 90):
+                strategy: str = None, factory_id: int = 0, endpoint: str = None, timeout: int = 90,
+                file: Any = None, filename: Optional[str] = None):
 
         # No prompt → return a reusable client instance (not a str)
         if prompt is None:
@@ -301,7 +431,7 @@ class Charles(str):
         # With prompt → block, return str
         ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
 
-        if image:
+        if image or file is not None:
             models = ["charles-json"]
         elif strategy and strategy in cls.STRATEGIES:
             models = cls.STRATEGIES[strategy]
@@ -310,7 +440,9 @@ class Charles(str):
 
         if len(models) == 1:
             r = _chat(text=prompt, model=_resolve_model(models[0]),
-                       factory_id=factory_id, endpoint=ep, timeout=timeout)
+                       factory_id=factory_id, endpoint=ep, timeout=timeout,
+                       image=image, image_type=image_type,
+                       file=file, filename=filename)
         else:
             r = cls._parallel_static(prompt, models, factory_id, ep, timeout)
 
@@ -516,32 +648,46 @@ class _MonceyClient:
 
 class Json(dict):
     """
-    Text in, JSON out. Blocks on construction, returns a dict.
+    Text (and/or file) in, JSON out. Blocks on construction, returns a dict.
 
         from monceai import Json
 
-        Json("list 5 primes")           # → {"primes": [2, 3, 5, 7, 11]}
-        Json('{"broken: json}')         # → fixed
-        Json("..." + Moncey("..."))     # → chains
+        Json("list 5 primes")              # → {"primes": [2, 3, 5, 7, 11]}
+        Json('{"broken: json}')            # → fixed
+        Json("..." + Moncey("..."))        # → chains
+
+        # File in — any type. Text-like files (.txt/.json/.csv/.md) are
+        # inlined into the prompt; binary (.pdf/.png/.docx) goes multipart.
+        Json("extract the order", file="order.txt")
+        Json("extract fields", file="quote.pdf")
+        Json("list the items", file=open("items.csv", "rb"))
+        Json("parse this", file=pdf_bytes, filename="q.pdf")
+
+        # Image in — still supported for back-compat.
+        Json("extract fields", image=open("photo.png","rb").read())
 
         j = Json("3 colors")
-        j["colors"]                     # list access
-        print(j)                        # json.dumps(indent=2)
+        j["colors"]                        # list access
+        print(j)                           # json.dumps(indent=2)
 
-        j.result                        # LLMResult metadata
+        j.result                           # LLMResult metadata
     """
 
     def __init__(self, prompt: str = "", factory_id: int = 0,
-                 endpoint: str = None, timeout: int = 30):
+                 endpoint: str = None, timeout: int = 30,
+                 image: bytes = None, image_type: str = "image/png",
+                 file: Any = None, filename: Optional[str] = None):
         super().__init__()
         ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
 
-        if not prompt:
+        if not prompt and file is None and image is None:
             self.result = LLMResult()
             return
 
         r = _chat(text=prompt, model="charles-json", factory_id=factory_id,
-                   endpoint=ep, timeout=timeout)
+                   endpoint=ep, timeout=timeout,
+                   image=image, image_type=image_type,
+                   file=file, filename=filename)
         self.result = r
 
         try:
@@ -564,8 +710,9 @@ class Json(dict):
         return _json.dumps(dict(self), ensure_ascii=False, indent=2)
 
 
-def VLM(prompt: str, image: bytes, model: str = "charles-json",
+def VLM(prompt: str, image: bytes = None, model: str = "charles-json",
          image_type: str = "image/png", json: bool = True,
+         file: Any = None, filename: Optional[str] = None,
          factory_id: int = 0, endpoint: str = None, timeout: int = 120) -> LLMResult:
     """
     Vision Language Model — image + text in, structured answer out.
@@ -581,16 +728,24 @@ def VLM(prompt: str, image: bytes, model: str = "charles-json",
 
     VLM-capable models: charles-json, sonnet, haiku, nova-pro.
     Default: charles-json (strict JSON + charles memory context).
+
+    Accepts ``file=`` as a path/Path/bytes/file-like for any doctype:
+    images go out as multipart; .txt/.json/.csv/.md are inlined into
+    the prompt so they reach the backend too.
     """
     if json and model not in ("charles-json",):
         model = "charles-json"
 
     resolved = _resolve_model(model)
 
+    if image is None and file is None:
+        raise TypeError("VLM: provide image=bytes or file=path/bytes/file-like")
+
     return _chat(
         text=prompt, image=image, image_type=image_type,
         model=resolved, factory_id=factory_id,
         endpoint=endpoint, timeout=timeout, as_json=json,
+        file=file, filename=filename,
     )
 
 

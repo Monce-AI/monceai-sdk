@@ -128,17 +128,29 @@ using the recalled context.
 | `nova-lite` | Nova Lite | — | — | 0.7s |
 | `nova-micro` | Nova Micro | — | — | 0.6s |
 
-## VLM — Image + Text In, JSON Out
+## VLM — Image / File + Text In, JSON Out
 
 ```python
 from monceai import VLM
 
+# Images — multipart to the backend
 r = VLM("what is in this image?", image=open("photo.png", "rb").read())
-r = VLM("extract all glass fields", image=pdf_bytes)
+
+# Unified `file=` — path, Path, bytes, or file-like. Any doctype.
+# Binary (.pdf/.png/.docx/...) → multipart.
+# Text-like (.txt/.json/.csv/.md/.ndjson/...) → inlined into the prompt,
+# so even text-only endpoints can "see" the file.
+r = VLM("extract all glass fields", file="quote.pdf")
+r = VLM("parse the order", file="order.json")
+r = VLM("summarise", file=open("notes.md", "rb"))
+r = VLM("what's wrong?", file=pdf_bytes, filename="q.pdf")
 
 r.text   # raw response
 r.json   # parsed dict
 ```
+
+All five eyed classes take the same `file=` argument:
+**`VLM`**, **`LLM`**, **`Json`**, **`Charles`**, and **`LLMSession.send`**.
 
 ## Charles — Smart Router
 
@@ -189,6 +201,11 @@ from monceai import Json
 Json("list 5 primes")              # → {"primes": [2, 3, 5, 7, 11]}
 Json('{"broken: json}')            # → fixes it
 Json("nom: Charles, age: 26")      # → {"nom": "Charles", "age": 26}
+
+# File in — text-like files are inlined, binaries go multipart.
+Json("extract the order", file="order.txt")
+Json("list the items", file="quote.pdf")
+Json("parse this", file=open("items.csv", "rb"))
 
 j = Json("3 colors with hex")
 j["colors"]                        # list access
