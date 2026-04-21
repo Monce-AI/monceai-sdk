@@ -144,6 +144,10 @@ class Extraction(dict):
         return self.get("user_id", self._user_id)
 
     @property
+    def filename(self) -> str:
+        return self.get("filename", "") or ""
+
+    @property
     def duration_ms(self) -> int:
         return int(self.get("duration_ms") or self._roundtrip_ms)
 

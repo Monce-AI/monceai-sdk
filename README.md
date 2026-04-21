@@ -456,6 +456,151 @@ the extraction event (just skips the Haiku distillation).
 Memory is isolated per `user_id` and mirrored to S3 (versioned) for
 permanency.
 
+### Recipes
+
+Patterns we actually ran against the live service while validating v1.2.0.
+A runnable version lives at [`examples/extraction_quickstart.py`](examples/extraction_quickstart.py)
+— `python examples/extraction_quickstart.py path/to/file.pdf`.
+
+**1. Quality probe — one PDF, full reflex loop**
+
+```python
+from monceai import Extraction, Matching
+
+ex = Extraction(
+    "quote.pdf",
+    user_id="7a3f9b2c",
+    industry="glass",
+    email_subject="Devis urgent",
+    email_body="Peux-tu traiter comme d'hab?",
+    auto_memory=True,
+)
+
+# The shape:
+assert isinstance(ex, dict)              # pretty-prints JSON
+assert ex.task_id and ex.duration_ms > 0
+assert isinstance(ex.lines, list)
+assert isinstance(ex.trust, dict)
+
+# What was extracted:
+print(f"vertical : {ex.result['vertical']}")
+print(f"client   : {ex.client['name']}")
+print(f"trust    : {ex.trust['score']} ({ex.trust['routing']})")
+print(f"lines    : {len(ex.lines)}")
+
+# What came back from the reflex loop:
+for bullet in ex.insights:
+    print(f"  insight  • {bullet}")
+for mem in ex.prior_memories:
+    print(f"  recalled • {mem[:80]}")
+
+# Independently cross-check the client match (matching lives in monceapp):
+cross = Matching(ex.client["name"], factory_id=4)
+print(f"cross-check: {cross['nom']} #{cross['numero_client']} conf={cross['confidence']}")
+```
+
+**2. Bulk throughput — parallel extractions with ThreadPoolExecutor**
+
+```python
+import concurrent.futures as cf
+from pathlib import Path
+from monceai import Extraction
+
+def run_one(path, idx):
+    return Extraction(
+        path,
+        user_id=f"bulk_{idx:04x}",
+        email_subject=f"Stress {idx}: {Path(path).name}",
+        auto_memory=True,
+        timeout=240,
+    )
+
+paths = ["a.pdf", "b.pdf", "c.pdf", "d.pdf"]  # your files
+with cf.ThreadPoolExecutor(max_workers=4) as pool:
+    futures = [pool.submit(run_one, p, i) for i, p in enumerate(paths)]
+    for fut in cf.as_completed(futures):
+        ex = fut.result()
+        print(f"{ex.filename:<30} trust={ex.trust.get('score')} "
+              f"routing={ex.trust.get('routing'):<14} {ex.duration_ms}ms")
+```
+
+Keep `max_workers` ≤ server worker count to avoid queueing. Selfservice
+currently runs 20 gunicorn workers on t3.medium — client parallelism of 8
+is a safe default.
+
+**3. Multi-file synthesis — one extraction from N attachments**
+
+```python
+from monceai import Outlook
+
+ol = Outlook(user_id="7a3f9b2c", auto_memory=True)
+
+# Pass a list of paths OR raw bytes OR (filename, bytes) tuples.
+# Selfservice runs the engine per file and merges the result server-side:
+# first successful file → header/client, all lines concat'd with
+# _source_file tagging, worst routing wins.
+ex = ol.extract_email(
+    attachments=[
+        "order.pdf",
+        ("quote.pdf", open("quote.pdf", "rb").read()),
+    ],
+    subject="Batch upload",
+    body="Two files, one workflow.",
+)
+
+print(f"merged from {len({l.get('_source_file') for l in ex.lines})} files")
+print(f"total lines: {len(ex.lines)}")
+print(f"worst routing: {ex.trust['routing']}")
+```
+
+**4. Memory reflex — sequential calls compound context**
+
+```python
+from monceai import Outlook
+
+ol = Outlook(user_id="ops_team_01", auto_memory=True)
+
+for path in sorted_pdfs:           # e.g. a day's incoming email attachments
+    ex = ol.extract_email(attachments=[path], subject=path.name)
+    # `ex.prior_memories` grows with each call — the server auto-recalls
+    # relevant history BEFORE each extraction and Haiku cross-references
+    # it in the insights it writes back.
+    if ex.prior_memories:
+        print(f"  → surfaced {len(ex.prior_memories)} prior memories as context")
+
+# At the end, Sonnet can summarize the entire run from user memory alone.
+summary = ol.chat("What pattern emerged across today's orders?")
+print(summary["reply"])
+```
+
+**5. Feedback — accept / reject / correct**
+
+```python
+ex = Extraction("quote.pdf", user_id="7a3f9b2c", auto_memory=True)
+
+# All three return a memory entry tagged 'feedback' and persist to disk + S3.
+ex.accept(note="looks right")
+ex.reject(reason="wrong client — this is ASCA not ASICA")
+ex.correct(line=2, field="verre1", was="44.2", should_be="44.2 LowE")
+
+# Feedback is searchable like any other memory:
+from monceai import Outlook
+ol = Outlook(user_id="7a3f9b2c")
+corrections = ol.memories(tag="correct", limit=50)
+```
+
+**6. Stats + history + recall**
+
+```python
+ol = Outlook(user_id="7a3f9b2c")
+
+ol.stats()                         # {'memories': 50, 'extractions': 16, 'conversations': 3}
+ol.history(limit=10)               # last 10 extractions with routing + trust
+ol.memories(limit=20)              # full memory list (optionally tag-filtered)
+ol.recall("VIP cloisonneur")       # keyword-scored search
+ol.forget("outdated pricing")      # substring match, returns count deleted
+```
+
 ---
 
 ## Snake — SAT Classifier (API key required)
