@@ -618,6 +618,50 @@ ol.recall("VIP cloisonneur")       # keyword-scored search
 ol.forget("outdated pricing")      # substring match, returns count deleted
 ```
 
+**7. Factory-aware `/extract` pipeline — drop-in replacement for claude.aws**
+
+[`examples/extract_pipeline.py`](examples/extract_pipeline.py) is a single-file
+`Extract` class that assembles `Extraction` + `Outlook` + `Matching` + `Json` +
+`Charles` into a payload that is byte-compatible with
+`POST https://claude.aws.monce.ai/extract`.
+
+```python
+from extract_pipeline import Extract
+
+ex = Extract("quote.pdf", factory_id=4, user_id="7a3f9b2c", industry="glass")
+
+ex["extracted_data"]["value"]["measurements"]    # prod schema
+ex["extracted_data"]["client_matching"]          # {"numero_client", "nom", "confidence"}
+ex["metadata"]["routing_decision"]               # "auto_approved" | "human_review"
+ex.measurements                                  # same as above, convenience accessor
+```
+
+What it actually does:
+
+1. `Outlook.recall(q=f"factory_{factory_id}")` pulls user-specific priors.
+2. `Extraction(source, user_id=..., industry="glass", context=...)` runs the
+   selfservice VLM lift per document with priors threaded into `context`.
+3. `upgrade_matches` fires one `Matching(..., field=..., factory_id=...)`
+   future **per (row × field) in parallel**; low-confidence hits (<0.75)
+   fall back to `Json` arbitration over the SDK's top-N candidates.
+4. `upgrade_client` fires 4 parallel `Matching` futures (nom / logo /
+   raison_sociale / siret), argmax wins.
+5. `Json` cross-doc synthesis when `len(sources) > 1`.
+6. `Charles` narrates the run for `_handle_metadata.agent_summary`.
+7. `Outlook.remember` logs the run so the next call for this user recalls
+   what happened.
+
+All prompts live in one file as triple-quoted f-strings keyed off a
+`FACTORY` table — one row per factory_id (1=VIT, 3=Monce, 4=VIP,
+9=Eurovitrage, 10=TGVI, 13=VIC), driving prompts, matching fields, and
+normalization toggles (spacer color, default gas, IGU decomposition).
+
+```bash
+python examples/extract_pipeline.py quote.pdf --factory 4 --user-id 7a3f9b2c
+python examples/extract_pipeline.py a.pdf b.pdf order.eml --factory 3 \
+    --user-id 7a3f9b2c --json
+```
+
 ---
 
 ## Snake — SAT Classifier (API key required)
