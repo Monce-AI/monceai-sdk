@@ -1,7 +1,7 @@
 # monceai
 
 [![PyPI](https://img.shields.io/badge/pip%20install-monceai-3776AB?logo=python&logoColor=white)](https://github.com/Monce-AI/monceai-sdk)
-[![Version](https://img.shields.io/badge/version-v1.1.0-5b2a8e)](https://github.com/Monce-AI/monceai-sdk/releases)
+[![Version](https://img.shields.io/badge/version-v1.2.0-5b2a8e)](https://github.com/Monce-AI/monceai-sdk/releases)
 [![Snake v5.4.5](https://img.shields.io/badge/Snake-v5.4.5-black)](https://github.com/Monce-AI/algorithmeai-snake)
 [![AWS Lambda](https://img.shields.io/badge/backend-AWS%20Lambda-FF9900?logo=awslambda&logoColor=white)](https://snakebatch.aws.monce.ai)
 [![AWS Bedrock](https://img.shields.io/badge/AWS-Bedrock-ff9900?logo=amazonaws&logoColor=white)](https://aws.amazon.com/bedrock/)
@@ -10,20 +10,31 @@
 [![License](https://img.shields.io/badge/license-proprietary-red)](LICENSE)
 [![Monce SAS](https://img.shields.io/badge/Monce-SAS-blue)](https://monce.ai)
 
-**LLM, VLM, Snake, SAT, Charles, Moncey, Json, Concierge — plus Matching, Calc, Diff, Monolith + memory-augmented overlays. One SDK, zero config for chat.**
+**LLM, VLM, Snake, SAT, Charles, Moncey, Json, Concierge, Matching, Calc, Diff — plus Extraction + Outlook for memory-augmented document workflows. One SDK, zero config for chat.**
 
 ```python
-from monceai import Charles, Matching, Calc
+from monceai import Charles, Matching, Calc, Extraction, Outlook
 
-Charles("6x7")                            # → "42" (boolean arithmetic)
-Calc("123x3456")                           # → "425088" (exact Decimal)
-Matching("LGB Menuiserie", factory_id=4)   # → client #60689 (89% conf)
-Matching("44.2 rTherm", factory_id=4)      # → article #63442 (100% conf)
+Charles("6x7")                                # → "42" (boolean arithmetic)
+Calc("123x3456")                               # → "425088" (exact Decimal)
+Matching("LGB Menuiserie", factory_id=4)       # → client #60689 (89% conf)
+Matching("44.2 rTherm", factory_id=4)          # → article #63442 (100% conf)
+
+# v1.2.0 — memory-augmented extraction
+ex = Extraction("quote.pdf", user_id="7a3f9b2c", auto_memory=True)
+ex.lines       # structured rows
+ex.trust       # {"score": 98, "routing": "AUTO_APPROVE"}
+ex.insights    # Haiku-distilled bullets written back to memory
+
+ol = Outlook(user_id="7a3f9b2c", auto_memory=True)
+ol.extract_email(attachments=[pdf_bytes], subject="Devis VIP", body="comme d'hab")
+ol.recall("VIP cloisonneur patterns")
 ```
 
 `Matching(text)` auto-routes client vs article in one parallel call.
 No need to specify `field=` — the server races both paths and returns
-the higher-confidence match.
+the higher-confidence match. `Extraction` / `Outlook` ship the full
+reflex loop: recall prior memories → extract → distill insights → remember.
 
 > Charles Dana &middot; Monce SAS &middot; April 2026 &middot; [Paper](https://monceapp.aws.monce.ai/paper)
 
@@ -46,6 +57,7 @@ Zero dependencies beyond `requests`. No API key needed for LLM/VLM/Charles.
 | `Charles()` / `Moncey()` | **None** | monceapp.aws.monce.ai | Free |
 | `Json()` / `Concierge()` | **None** | monceapp / concierge.aws.monce.ai | Free |
 | `Matching()` / `Calc()` / `Diff()` | **None** | monceapp.aws.monce.ai | Free |
+| `Extraction()` / `Outlook()` | **user_id only** | selfservice.aws.monce.ai | Free |
 | `Snake()` | `SNAKE_API_KEY` | snakebatch.aws.monce.ai | Per-invocation |
 | `SAT()` | `SAT_API_KEY` | npdollars.aws.monce.ai | Per-invocation |
 
@@ -317,6 +329,132 @@ print(d.report())         # formatted side-by-side
 ```
 
 Perfect for proving the value of `(monceai-)` context to stakeholders.
+
+---
+
+## Extraction — Memory-Augmented File Extraction (v1.2.0)
+
+One-shot: file in, structured data + insights + memory out. Backed by
+[`selfservice.aws.monce.ai`](https://selfservice.aws.monce.ai), which hosts
+the full VLM engine and per-user memory store. No key — just pass a
+`user_id` (8-char opaque token).
+
+```python
+from monceai import Extraction
+
+ex = Extraction("quote.pdf", user_id="7a3f9b2c")
+
+ex.lines              # list[dict] — extracted rows
+ex.trust              # {"score": 98, "routing": "AUTO_APPROVE"}
+ex.client             # {"name": "RIOU GLASS", "id": ..., "match": ...}
+ex.header             # {"document_type": "devis", "language": "fr", ...}
+ex.validation         # {"issues": [...], "overall_confidence": 0.92}
+ex.task_id            # for feedback / audit
+ex.duration_ms        # end-to-end latency
+```
+
+Accepts a path, raw bytes, or a list of paths/bytes for multi-file:
+
+```python
+Extraction(pdf_bytes, filename="order.pdf", user_id="7a3f9b2c")
+Extraction(["a.pdf", "b.pdf"], user_id="7a3f9b2c")
+```
+
+### Reflex mode (auto_memory=True)
+
+Fires a Haiku pass after extraction, distilling 1-3 short bullets worth
+remembering (client patterns, routing quirks, recurring corrections) —
+and writes them back as memory entries tagged `insight`. The next
+extraction automatically sees them as `prior_memories`.
+
+```python
+ex = Extraction("quote.pdf", user_id="7a3f9b2c", auto_memory=True,
+                email_subject="Devis VIP urgent",
+                email_body="Peux-tu traiter comme d'hab?")
+
+ex.insights            # ['VIP cloisonneur orders consistently specify warm edge 16mm', ...]
+ex.prior_memories      # memories surfaced as context for *this* extraction
+```
+
+### Feedback
+
+```python
+ex.accept(note="looks right")
+ex.reject(reason="wrong client")
+ex.correct(line=0, was="44.2 rTherm", should_be="44.2 clair")
+```
+
+Feedback is stored as tagged memory and shows up in downstream recall.
+
+### Benchmark (live, parallel, 3 real PDFs)
+
+| PDF | Pages | Lines | Trust | Routing | Duration |
+|---|---:|---:|---:|---|---:|
+| Safran aerospace PO | 1 | 1 | 100 | AUTO_APPROVE | 14.0s |
+| ASICA industrial PO | 1 | 6 | 98 | AUTO_APPROVE | 14.7s |
+| Gasket International enquiry | 2 | 1 | 100 | AUTO_APPROVE | 12.1s |
+
+Wall-clock for all three in parallel: **30.5s**. Auto-memory surfaced the
+ASICA context on the third extraction mid-burst.
+
+---
+
+## Outlook — Email Workflow Client (v1.2.0)
+
+Higher-level wrapper around `Extraction` for email / Outlook flows. Ships
+`remember`, `recall`, `forget`, `history`, `chat`, and `extract_email`.
+
+```python
+from monceai import Outlook
+
+ol = Outlook(user_id="7a3f9b2c", auto_memory=True)
+
+# Extract attachments with full email context (subject + body)
+ex = ol.extract_email(
+    attachments=[pdf_bytes, ("invoice.xlsx", xlsx_bytes)],
+    subject="Devis cloisonneur VIP",
+    body="Peux-tu me traiter ça comme d'hab?",
+)
+ex.lines; ex.insights
+
+# Memory ops
+ol.remember("client always wants 44.2 rTherm as intercalaire", tags=["VIP"])
+ol.recall("VIP cloisonneur patterns")          # keyword-scored
+ol.forget("outdated note")                     # substring match
+
+# History and activity
+ol.history(limit=10)                           # past extractions
+ol.memories(limit=50, tag="insight")           # memory listing
+ol.stats()                                     # {memories, extractions, conversations}
+
+# Chat — Sonnet grounded on this user's memory only
+reply = ol.chat("What does this user usually route to VIP?")
+reply["reply"]; reply["latency_ms"]
+```
+
+### The reflex loop
+
+When `auto_memory=True`, every `extract_email()` call chains:
+
+```
+recall(subject)
+  ↓
+extract(file, context=body)
+  ↓
+distill(result, prior=recall_output)   ← Haiku
+  ↓
+remember(bullets)                       ← tagged 'insight'
+```
+
+Toggle at runtime: `ol.auto_memory = False`. Manual mode still auto-logs
+the extraction event (just skips the Haiku distillation).
+
+### Endpoints hit
+
+`Outlook` is a thin client over [`selfservice.aws.monce.ai`](https://selfservice.aws.monce.ai)
+— the full API is documented at [/docs](https://selfservice.aws.monce.ai/docs).
+Memory is isolated per `user_id` and mirrored to S3 (versioned) for
+permanency.
 
 ---
 
