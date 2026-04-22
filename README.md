@@ -266,54 +266,92 @@ r2 = s.send("what is my name?")   # remembers context
 
 ---
 
-## Matching — Factory-Driven Field Reliability (v1.1.0)
+## Matching — Universal Client & Article Resolver (v1.2.3)
 
-Overlay for extracted terms. **One call, auto-detects client vs article.**
-Wraps `claude.aws/stage_0` (client cascade) and `snake.aws/query`
-(article matching) — both raced in parallel, higher-confidence wins.
+Constructor-to-resolution: `Matching(arg, ...)` blocks and *is* the result.
+Four input forms, one class, no fuzzy. `/batch` and `/batch_client` on
+snake.aws are the source of truth; snake's own candidate list is re-ranked
+locally (CPU only); an optional LLM arbitration band on `[0.6, 0.95)`
+uses monceapp Haiku + concierge in parallel, agreement-gated.
 
 ```python
 from monceai import Matching
 
-# Auto-routing — no field= needed
-Matching("LGB Menuiserie SAS", factory_id=4)
-# → {"kind": "client", "numero_client": "9232", "nom": "LGB MENUISERIE",
-#    "confidence": 0.98, "method": "snake_exact", ...}
-
-Matching("44.2 rTherm", factory_id=4)
+# 1. single article
+Matching("44.2 rTherm", factory_id=4, field="verre")
 # → {"kind": "article", "num_article": "63442",
-#    "denomination": "44.2 rTherm", "confidence": 1.0, ...}
+#    "denomination": "44.2 rTherm", "confidence": 1.0, "method": "snake_exact"}
 
-# Explicit field= override (per-field article matching)
-Matching("44.2", field="verre", factory_id=4)
-# → {"num_article": "63442", "denomination": "44.2", "confidence": 1.0}
+# 2. array — one /batch call, results in input order
+r = Matching(["44.2 rTherm", "4/16/4", "SGG Planitherm"],
+             factory_id=4, field="verre")
+r["stats"]              # {n, matched_rate, mean_confidence, by_tier}
+r.items_list            # [{...}, {...}, {...}] in input order
 
-# JSON overlay — preserves extra fields, enriches client block
-Matching({"nom": "LGB", "qty": 50, "adresse": "Lyon"}, factory_id=4)
-# → {"nom": "LGB", "qty": 50, "adresse": "Lyon",
-#    "numero_client": "9232", "match_confidence": 1.0}
+# 3. client by free text (auto-parses nom / siret / email)
+Matching("LGB Menuiserie SAS, SIRET 552 100 554 00025", factory_id=4)
+# → {"kind": "client", "numero_client": "9232", "nom": "LGB MENUISERIE",
+#    "confidence": 0.98, "method": "snake_exact"}
 
-# Batch
-Matching(["LGB", "ACTIF PVC", "VME"], factory_id=4)
+# 4. document → client (pdf / image / docx / eml / msg)
+from pathlib import Path
+Matching(Path("quote.pdf"), factory_id=4)
+# → claude.aws/stage_0 → client_infos + matched client
 
-# Reusable client — parallel futures (Charles/Moncey style)
+# 5. auto mode (no field, no kind)
+Matching("Riou Group", factory_id=4)           # → client
+Matching("44.2 rTherm WE noir", factory_id=4)  # → article
+# Ambiguous? Fires both in parallel, returns higher-confidence winner.
+
+# 6. reusable client — deferred futures, parallel across cores
 m = Matching(factory_id=4)
-a = m("LGB"); b = m("44.2 rTherm")
-print(a.get("numero_client"))  # blocks on read
+a = m("44.2 rTherm", field="verre")
+b = m("LGB")
+a["num_article"]        # blocks until ready
 ```
 
-### Production benchmark (50 real clients + 50 real articles)
+### LLM arbitration (optional, agreement-gated)
 
-Pulled from `VIP_Clients_Unique.xlsx` / `VIP_Articles_Unique.xlsx`:
+Enable for the ambiguous middle. Below 0.6 = garbage, not rescuable.
+At/above 0.95 = seamless passthrough. In between, monceapp Haiku and
+`concierge.aws/chat` vote independently — only agreement mutates the pick.
 
-| | Routing | Matches |
-|---|---|---|
-| Clients | 50/50 (100%) | 50/50 (100%) |
-| Articles | 20/50 (40%) | 20/50 (40%) |
+```python
+Matching("Triplevitrage33/2+4+5Trempé", factory_id=4,
+         use_llm=True, top_k=20)
+# → local rerank picks a candidate; if conf ∈ [0.6, 0.95), both arbiters
+#   vote; agreement promotes the pick to tier 2 with method="llm_arb_agree"
+```
 
-Article misses are catalog coverage (snake hasn't seen the item), not
-routing bugs. Zero client→article misroutes. One article→client misroute
-(`"PRBLOC"` matched a client with that name).
+### Accuracy assessment
+
+```python
+pairs = [("44.2 rTherm", "63442"), ("SGG Planitherm", "98219"), ...]
+report = Matching.assess(pairs, factory_id=4, field="global",
+                         use_llm=True, top_k=20)
+
+report["hit_top1"]            # 0.853 (85.3% top-1)
+report["hit_topk"]            # top-k recall
+report["above_floor_accuracy"] # accuracy on rows ≥ 0.6 confidence
+report["by_method"]           # per-method breakdown
+report["calibration"]         # [(lo, hi, n, hit_rate), ...]
+report["failures"]            # first 200 wrong picks with method/conf
+```
+
+### Benchmark — factory 4 (VIP), April 2026
+
+342 queries across 57 articles × 6 variant kinds (exact / lower /
+extra-token / reorder / OCR / nospace), vs live `snake.aws/batch`:
+
+| Config | top-1 | Tokens | Wall clock |
+|---|---|---|---|
+| Hosted cascade (snake→haiku→fuzzy) | 40% | — | — |
+| Matching v2, CPU only (no fuzzy, no LLM) | **73.7%** | 0 | 4.3s |
+| Matching v2, top_k=20 + LLM arbitration | **85.3%** | 4,400 | ~50s |
+
+Variant breakdown @ 85%: exact 98%, lower 98%, reorder 95%, extra-token 90%,
+OCR 83%, nospace 46%. Calibration: `[0.95, 1.0)` → 97%, `[0.8, 0.95)` → 91%.
+Benchmark source: `bench_matching.py`.
 
 Article fields for explicit `field=`: `verre`, `verre1`, `verre2`, `verre3`,
 `intercalaire`, `intercalaire1`, `intercalaire2`, `remplissage`, `gaz`,

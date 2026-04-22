@@ -22,15 +22,25 @@ API key required (SNAKE_API_KEY / SAT_API_KEY):
     generate_report — Build HTML/PDF reports from model results.
 """
 
-__version__ = "1.2.2"
+__version__ = "1.2.3"
 
 from .snake import Snake
 from .sat import SAT, SATSession, SATResult, SATProof
 from .llm import (
     LLM, VLM, Charles, Moncey, Architect, Json, Concierge,
     LLMSession, LLMResult,
-    Matching, Calc, Diff,
+    Calc, Diff,
+)
+from .matching import (
+    Matching,
+    classify as matching_classify,
+    parse_client_text,
+    looks_like_client,
+    looks_like_article,
+    CLIENT_FIELDS,
+    ARTICLE_FIELDS,
 )
 from .report import generate_report
 from .extraction import Extraction
 from .outlook import Outlook
+from .monceos import MonceOS
