@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "monceai"
-version = "1.2.1"
-description = "Monce AI SDK — Snake, SAT, LLM/VLM, Matching, Calc, Diff, Extraction, Outlook"
+version = "1.2.2"
+description = "Monce AI SDK — Snake, SAT, LLM/VLM, Matching, Calc, Diff, Extraction, Outlook, Architect"
 requires-python = ">=3.9"
 license = "LicenseRef-Proprietary"
 authors = [{name = "Charles Dana", email = "charles@monce.ai"}]

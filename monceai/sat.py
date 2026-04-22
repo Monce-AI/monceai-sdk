@@ -589,121 +589,173 @@ class SATSession:
     def swarm(self, budget: float = 60.0, atom: float = 1.0,
               max_depth: int = 15, max_workers: int = 10000,
               vocal: bool = False) -> SATResult:
-        """Exponential BCP+CDCL swarm. The real solver.
+        """Exponential BCP+CDCL swarm.
 
         Each worker:
-          1. BCP: D.deduce(branch) → contradiction? → learned clause, DONE
-          2. SPLIT: pick variable, fire 2 children (async)
-          3. CDCL: Kissat with proof → extract short learned clauses
-          4. FEED: all clauses → dictionary → chain → conflict
+          1. BCP: D.deduce(branch) → contradiction? → free UNSAT
+          2. SPLIT: fire 2 children immediately (exponential)
+          3. CDCL: Kissat with DRAT proof → short learned clauses
+          4. FEED: clauses → dictionary → chain → conflict
 
-        Workers spawn exponentially. BCP prunes before spawn.
-        Dictionary strengthens every round. Convergence.
+        Split fires BEFORE Kissat returns — tree grows without waiting.
+        BCP prunes dead children before spawn. DRAT feeds short clauses.
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ThreadPoolExecutor
         import threading
 
         t0 = time.perf_counter()
         deadline = t0 + budget
         self._cancel = False
 
-        # Shared state (thread-safe via lock)
-        lock = threading.Lock()
-        workers_fired = [0]
-        clauses_fed = [0]
-        solution = [None]  # [model] if SAT found
-        # Build optimal once, workers share it read-only
-        optimal_snap = [self._build_optimal_dimacs()]
+        # ── Fast path: Kissat direct (1s) ────────────────
+        status, sol = self.D.solve()
+        if status in ("SAT", "UNSAT"):
+            self.result = self._make_result(status, sol, t0)
+            return self.result
 
-        def _worker(branch: list[int], depth: int):
-            """One BCP+CDCL worker. May spawn children."""
-            if self._stopped() or solution[0] is not None:
-                return
-            if time.perf_counter() > deadline:
+        optimal_dimacs = self._build_optimal_dimacs()
+        res, model, kms = self._kissat_call(optimal_dimacs, [],
+                                            min(1.0, budget * 0.1))
+        if res in ("SAT", "UNSAT"):
+            if vocal:
+                print(f"  kissat direct: {res} in {kms:.0f}ms")
+            self.result = self._make_result(res, model, t0)
+            return self.result
+
+        # ── Swarm: multi-depth with DRAT ────────────────
+        import random as _rng
+        lock = threading.Lock()
+        stats = {"workers": 0, "clauses": 0, "bcp_prune": 0}
+        solution = [None]
+        optimal_snap = [optimal_dimacs]
+
+        def _feed(clauses_list):
+            """Seed clauses into dictionary. Caller holds lock."""
+            for c in clauses_list:
+                self.D.seed(c, original=False)
+                stats["clauses"] += 1
+
+        def _worker(branch, depth_label):
+            """BCP + CDCL worker. Branch is a full assumption set."""
+            if (self._stopped() or solution[0] is not None
+                    or time.perf_counter() > deadline):
                 return
 
             with lock:
-                workers_fired[0] += 1
-                if workers_fired[0] > max_workers:
+                stats["workers"] += 1
+                if stats["workers"] > max_workers:
                     return
 
-            # 1. BCP
+            # BCP
             trail = self.D.deduce(frozenset(branch))
             if self.D.contradicts(trail):
-                clause = [-l for l in branch]
                 with lock:
-                    self.D.seed(clause, original=False)
-                    clauses_fed[0] += 1
+                    _feed([[-l for l in branch]])
+                    stats["bcp_prune"] += 1
                 return
 
-            # 2. CDCL: Kissat with proof extraction
+            # CDCL with DRAT
             remaining = deadline - time.perf_counter()
-            if remaining < 0.1:
+            if remaining < 0.1 or solution[0] is not None:
                 return
-            probe_atom = min(atom, remaining)
 
-            res, model, learned_clauses, kms = \
-                self._kissat_with_proof(
-                    branch, probe_atom, dimacs=optimal_snap[0])
+            res, model, learned, kms = self._kissat_with_proof(
+                branch, min(atom, remaining),
+                dimacs=optimal_snap[0])
 
             if res == "SAT" and model:
                 solution[0] = model
                 self._cancel = True
                 return
 
-            if res == "UNSAT" and learned_clauses:
+            if res == "UNSAT" and learned:
                 with lock:
-                    for c in learned_clauses:
-                        if len(c) <= max_depth:
-                            self.D.seed(c, original=False)
-                            clauses_fed[0] += 1
-                    if clauses_fed[0] % 100 == 0:
-                        self.D.chain(max_rounds=2)
-                        self.D.conflicts()
-                        # Rebuild optimal for future workers
-                        optimal_snap[0] = self._build_optimal_dimacs()
+                    _feed(learned)
 
-            # 3. SPLIT: pick variable, spawn 2 children
-            if depth >= max_depth or solution[0] is not None:
-                return
+        n_threads = min(os.cpu_count() or 4, 32, max_workers)
+        pool = ThreadPoolExecutor(max_workers=n_threads)
 
-            assigned = {abs(l) for l in trail}
-            split_var = None
-            for v in range(1, self.n_vars + 1):
-                if v not in assigned:
-                    split_var = v
-                    break
-            if split_var is None:
-                return
-
-            for pol in [split_var, -split_var]:
-                child_branch = branch + [pol]
-                child_trail = self.D.deduce(frozenset(child_branch))
-                if self.D.contradicts(child_trail):
-                    clause = [-l for l in child_branch]
-                    with lock:
-                        self.D.seed(clause, original=False)
-                        clauses_fed[0] += 1
-                else:
-                    pool.submit(_worker, child_branch, depth + 1)
-
-        # Fire the swarm
-        pool = ThreadPoolExecutor(max_workers=min(64, max_workers))
         try:
-            # Start with root
-            pool.submit(_worker, [], 0)
-
-            # Wait for completion or timeout
-            while time.perf_counter() < deadline:
-                if solution[0] is not None:
+            # Sweep: deep → shallow. Fire workers in batches.
+            # Deep branches resolve fast, DRAT gives short clauses.
+            # Enriched dictionary makes shallower branches easier.
+            for depth in [20, 15, 10, 5, 1]:
+                if (time.perf_counter() > deadline
+                        or solution[0] is not None):
                     break
+
+                bb_set = {abs(l) for l in self.D.backbones()}
+                free = [v for v in range(1, self.n_vars + 1)
+                        if v not in bb_set]
+                if depth > len(free):
+                    continue
+
+                # Time budget for this depth level
+                remaining = deadline - time.perf_counter()
+                depth_budget = remaining * 0.3
+                depth_deadline = time.perf_counter() + depth_budget
+
+                # Fire batch of workers at this depth
+                futures = []
+                while (time.perf_counter() < depth_deadline
+                       and solution[0] is None
+                       and stats["workers"] < max_workers):
+                    if depth == 1:
+                        # Single-var probes: both polarities
+                        if not free:
+                            break
+                        v = free[len(futures) % len(free)]
+                        pol = v if len(futures) % 2 == 0 else -v
+                        branch = [pol]
+                    else:
+                        pick = _rng.sample(
+                            free, min(depth, len(free)))
+                        branch = [v * _rng.choice([1, -1])
+                                  for v in pick]
+
+                    f = pool.submit(_worker, branch, depth)
+                    futures.append(f)
+
+                    # Don't fire faster than threads can consume
+                    if len(futures) >= n_threads * 2:
+                        # Wait for some to finish
+                        for done_f in futures[:n_threads]:
+                            try:
+                                done_f.result(timeout=0.01)
+                            except Exception:
+                                pass
+                        futures = futures[n_threads:]
+
+                # Wait for depth batch to complete
+                for f in futures:
+                    if solution[0] is not None:
+                        break
+                    try:
+                        f.result(
+                            timeout=max(0, deadline
+                                        - time.perf_counter()))
+                    except Exception:
+                        pass
+
+                # Chain + conflict between depth levels
+                self.D.chain(max_rounds=3)
+                self.D.conflicts()
+                optimal_snap[0] = self._build_optimal_dimacs()
+
                 # Check dictionary
                 status, sol = self.D.solve()
                 if status in ("SAT", "UNSAT"):
                     solution[0] = sol
                     self._cancel = True
                     break
-                time.sleep(0.2)
+
+                if vocal:
+                    bb_now = len(self.D.backbones())
+                    print(f"  d={depth}: {stats['workers']}w "
+                          f"{stats['clauses']}c "
+                          f"{stats['bcp_prune']}bcp "
+                          f"bb={bb_now} t={bb_now/self.n_vars:.3f} "
+                          f"entries={self.entries}")
 
         finally:
             self._cancel = True
@@ -716,15 +768,15 @@ class SATSession:
         total_ms = (time.perf_counter() - t0) * 1000
 
         if vocal:
-            print(f"  swarm: {workers_fired[0]} workers, "
-                  f"{clauses_fed[0]} clauses, "
+            print(f"  swarm: {stats['workers']} workers, "
+                  f"{stats['clauses']} clauses, "
+                  f"{stats['bcp_prune']} bcp prunes, "
                   f"bb={len(self.backbones)}, "
-                  f"t={self.tension:.3f}, "
-                  f"{total_ms:.0f}ms")
+                  f"t={self.tension:.3f}, {total_ms:.0f}ms")
 
-        self._log(f"swarm: workers={workers_fired[0]} "
-                  f"clauses={clauses_fed[0]} "
-                  f"bb={len(self.backbones)} {total_ms:.0f}ms")
+        self._log(f"swarm: w={stats['workers']} c={stats['clauses']} "
+                  f"bcp={stats['bcp_prune']} bb={len(self.backbones)} "
+                  f"{total_ms:.0f}ms")
 
         if solution[0] is not None:
             self.result = self._make_result("SAT", solution[0], t0)
@@ -733,11 +785,9 @@ class SATSession:
             if status in ("SAT", "UNSAT"):
                 self.result = self._make_result(status, sol, t0)
             else:
-                # Try Kissat on enriched optimal
                 remaining = budget - (time.perf_counter() - t0)
                 if remaining > 1.0:
-                    r = self.solve(budget=remaining)
-                    return r
+                    return self.solve(budget=remaining)
                 self.result = self._make_result("TIMEOUT", None, t0)
 
         return self.result

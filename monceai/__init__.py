@@ -10,6 +10,7 @@ Free (no API key):
     Matching   — Factory-driven field matching (client + article). v1.1.0
     Calc       — Exact NP-complete arithmetic. v1.1.0
     Diff       — Raw vs monceai-enhanced side by side. v1.1.0
+    Architect  — ASCII schemas / diagrams via charles-architect. v1.2.2
 
     Extraction — Memory-augmented file extraction. v1.2.0
     Outlook    — Email / Outlook workflow (extract + recall + remember). v1.2.0
@@ -21,12 +22,12 @@ API key required (SNAKE_API_KEY / SAT_API_KEY):
     generate_report — Build HTML/PDF reports from model results.
 """
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 from .snake import Snake
 from .sat import SAT, SATSession, SATResult, SATProof
 from .llm import (
-    LLM, VLM, Charles, Moncey, Json, Concierge,
+    LLM, VLM, Charles, Moncey, Architect, Json, Concierge,
     LLMSession, LLMResult,
     Matching, Calc, Diff,
 )

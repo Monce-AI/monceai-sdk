@@ -646,6 +646,109 @@ class _MonceyClient:
         return f'Moncey(endpoint={self._endpoint!r})'
 
 
+class Architect(str):
+    """
+    ASCII schemas on demand. Backed by charles-architect — every response
+    is a diagram (DB schema, system architecture, flow chart, ERD).
+
+        from monceai import Architect
+
+        # Blocking — returns the diagram as a str
+        schema = Architect("auth service: users, sessions, api keys")
+        print(schema)
+
+        # File in — describe an existing system, get a diagram back
+        Architect("diagram this repo", file="README.md")
+
+        # Client mode — reusable, fires parallel futures
+        a = Architect()
+        s1 = a("postgres schema for a glass factory order system")
+        s2 = a("sequence diagram for OAuth2 PKCE flow")
+        print(s1)   # blocks on first read
+
+        # Access raw LLMResult (tokens, latency, session_id)
+        schema.result.elapsed_ms
+    """
+
+    def __new__(cls, prompt: str = None, factory_id: int = 0,
+                endpoint: str = None, timeout: int = 120,
+                file: Any = None, filename: Optional[str] = None):
+
+        if prompt is None and file is None:
+            client = object.__new__(_ArchitectClient)
+            client._endpoint = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+            client._factory_id = factory_id
+            client._timeout = timeout
+            return client
+
+        ep = (endpoint or DEFAULT_ENDPOINT).rstrip("/")
+        r = _chat(text=prompt or "", model="charles-architect",
+                  factory_id=factory_id, endpoint=ep, timeout=timeout,
+                  file=file, filename=filename)
+
+        instance = super().__new__(cls, r.text)
+        instance.result = r
+        _report_usage(ep, prompt or f"file:{filename or 'upload'}", r)
+        return instance
+
+
+class _ArchitectFuture:
+    """Lazy future for Architect client mode."""
+    def __init__(self, prompt, endpoint, factory_id, timeout,
+                 file=None, filename=None):
+        import threading
+        self._prompt = prompt
+        self._result = None
+        self._text = None
+        self._done = threading.Event()
+
+        def _compute():
+            r = _chat(text=prompt or "", model="charles-architect",
+                      factory_id=factory_id, endpoint=endpoint,
+                      timeout=timeout, file=file, filename=filename)
+            self._result = r
+            self._text = r.text
+            self._done.set()
+            _report_usage(endpoint, prompt or f"file:{filename or 'upload'}", r)
+
+        threading.Thread(target=_compute, daemon=True).start()
+
+    @property
+    def result(self):
+        self._done.wait()
+        return self._result
+
+    def __str__(self):
+        self._done.wait()
+        return self._text
+
+    def __repr__(self):
+        if self._done.is_set():
+            return self._text[:60]
+        return f'[drawing {str(self._prompt)[:30]}...]'
+
+    def __format__(self, spec): return format(str(self), spec)
+    def __add__(self, other): return str(self) + other
+    def __radd__(self, other): return other + str(self)
+    def __len__(self): return len(str(self))
+    def __bool__(self): self._done.wait(); return bool(self._text)
+
+
+class _ArchitectClient:
+    """Reusable client returned by Architect() with no args."""
+
+    def __call__(self, prompt=None, file=None, filename=None, **kw):
+        return _ArchitectFuture(
+            prompt, self._endpoint,
+            kw.get("factory_id", self._factory_id),
+            kw.get("timeout", self._timeout),
+            file=file, filename=filename,
+        )
+
+    def __repr__(self):
+        return f'Architect(endpoint={self._endpoint!r})'
+
+
 class Json(dict):
     """
     Text (and/or file) in, JSON out. Blocks on construction, returns a dict.

@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/license-proprietary-red)](LICENSE)
 [![Monce SAS](https://img.shields.io/badge/Monce-SAS-blue)](https://monce.ai)
 
-**LLM, VLM, Snake, SAT, Charles, Moncey, Json, Concierge, Matching, Calc, Diff — plus Extraction + Outlook for memory-augmented document workflows. One SDK, zero config for chat.**
+**LLM, VLM, Snake, SAT, Charles, Moncey, Architect, Json, Concierge, Matching, Calc, Diff — plus Extraction + Outlook for memory-augmented document workflows. One SDK, zero config for chat.**
 
 ```python
 from monceai import Charles, Matching, Calc, Extraction, Outlook
@@ -192,6 +192,30 @@ print(a)  # blocks on read
 Pipeline: snake.aws/comprendre (deterministic glass decomp) &rarr;
 moncesuite.aws/comprendre (10 classifiers if quality < 75%) &rarr;
 Haiku synthesis. Default factory_id=3 (Monce).
+
+## Architect — ASCII Schemas on Demand
+
+```python
+from monceai import Architect
+
+# Blocking — str subclass, IS the diagram
+schema = Architect("auth service: users, sessions, api keys")
+print(schema)                          # boxed ASCII ERD
+
+# File in — diagram an existing spec
+Architect("diagram this module", file="monceai/llm.py")
+
+# Client mode — reusable, parallel futures
+a = Architect()
+s1 = a("postgres schema for glass factory orders")
+s2 = a("sequence diagram: OAuth2 PKCE flow")
+print(s1)                              # blocks on first read
+
+schema.result.elapsed_ms               # LLMResult metadata
+```
+
+Backed by `charles-architect` on monceapp.aws.monce.ai — every response is
+a diagram (ERD, class diagram, sequence, flowchart, system architecture).
 
 ## Json — Structured Output (dict subclass)
 
