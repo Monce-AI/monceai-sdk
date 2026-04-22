@@ -2,6 +2,8 @@
 
 [![PyPI](https://img.shields.io/badge/pip%20install-monceai-3776AB?logo=python&logoColor=white)](https://github.com/Monce-AI/monceai-sdk)
 [![Version](https://img.shields.io/badge/version-v1.2.4-5b2a8e)](https://github.com/Monce-AI/monceai-sdk/releases)
+[![Synthax](https://img.shields.io/badge/Synthax-%2412%2Fquery%20flagship-c084fc)](#synthax--deep-reasoning-flagship-v124)
+[![Playground](https://img.shields.io/badge/Playground-drag%20drop%20connect-8b5cf6)](https://monceapp.aws.monce.ai/playground)
 [![MonceOS](https://img.shields.io/badge/MonceOS-v1.2.4-6d28d9)](#monceos--brick-kit-for-field-orders-quotes-v124)
 [![Matching v2](https://img.shields.io/badge/Matching-v2%20rerank+arbitration-0ea5e9)](#matching--universal-client--article-resolver-v123)
 [![Snake v5.4.5](https://img.shields.io/badge/Snake-v5.4.5-black)](https://github.com/Monce-AI/algorithmeai-snake)
@@ -12,15 +14,21 @@
 [![License](https://img.shields.io/badge/license-proprietary-red)](LICENSE)
 [![Monce SAS](https://img.shields.io/badge/Monce-SAS-blue)](https://monce.ai)
 
-**LLM, VLM, Snake, SAT, Charles, Moncey, Architect, Json, Concierge, Matching, Calc, Diff — plus Extraction + Outlook for memory-augmented document workflows, and MonceOS for brick-ready composition. One SDK, zero config for chat.**
+**LLM, VLM, Snake, SAT, Charles, Moncey, Architect, Json, Concierge, Matching, Calc, Diff, Synthax, Google — plus Extraction + Outlook for memory-augmented document workflows, and MonceOS for brick-ready composition. One SDK, zero config for chat.**
 
 ```python
-from monceai import Charles, Matching, Calc, Extraction, Outlook
+from monceai import Charles, Matching, Calc, Extraction, Outlook, Synthax
 
 Charles("6x7")                                # → "42" (boolean arithmetic)
 Calc("123x3456")                               # → "425088" (exact Decimal)
 Matching("LGB Menuiserie", factory_id=4)       # → client #60689 (89% conf)
 Matching("44.2 rTherm", factory_id=4)          # → article #63442 (100% conf)
+
+# v1.2.4 — deep reasoning flagship, $12/query budget
+s = Synthax("design auth for a glass factory portal")
+str(s)         # TL;DR  (≤ 3 sentences, Haiku-compacted)
+s.answer       # exhaustive Sonnet synthesis
+s.job.stages   # recall → plan → draft → adversary → revise → arbiter → notify
 
 # v1.2.0 — memory-augmented extraction
 ex = Extraction("quote.pdf", user_id="7a3f9b2c", auto_memory=True)
@@ -745,6 +753,168 @@ python examples/extract_pipeline.py quote.pdf --factory 4 --user-id 7a3f9b2c
 python examples/extract_pipeline.py a.pdf b.pdf order.eml --factory 3 \
     --user-id 7a3f9b2c --json
 ```
+
+---
+
+## Synthax — Deep Reasoning Flagship (v1.2.4)
+
+[![budget](https://img.shields.io/badge/budget-%2412%2Fquery-c084fc)](#synthax--deep-reasoning-flagship-v124)
+[![stages](https://img.shields.io/badge/stages-9%20specialized-6d28d9)](#synthax--deep-reasoning-flagship-v124)
+[![tokens](https://img.shields.io/badge/tokens-unlimited-22c55e)](#synthax--deep-reasoning-flagship-v124)
+
+Synthax is a multi-stage reasoning pipeline — each specialist's output
+becomes the next's input. The planner (Haiku) picks the chain per
+prompt; math skips the Architect, glass inserts Moncey, architecture
+inserts the ASCII diagrammer. Adversary (cold Sonnet) attacks the draft;
+revise patches the holes. Verify backstops numeric claims with exact
+`Calc`. Arbiter (Sonnet) synthesizes TL;DR + confidence + residual
+doubts. Notify writes the verdict back to Concierge so the next run
+recalls it.
+
+```python
+from monceai import Synthax
+
+# Input: a text prompt. Output: a Haiku-compacted TL;DR with an
+# exhaustive Sonnet answer attached.
+s = Synthax("design an auth layer for a glass factory portal",
+            budget_usd=12.0)
+
+# Output shape
+str(s)                 # TL;DR (≤ 3 sentences, ≤ 280 chars)
+s.answer               # exhaustive Sonnet synthesis
+s.job.stages           # list[Stage] — full audit timeline
+s.job.artifacts        # dict{stage_name → text}
+s.job.cost_usd         # accumulated USD, hard-capped at budget
+s.job.elapsed_ms       # wall-clock
+s.job.confidence       # float 0..1 from arbiter
+s.job.doubts           # list[str] — residual concerns
+s.job.arbiter_rationale
+print(s.report())      # human-readable stage-by-stage timeline
+```
+
+Reusable client (lazy futures, like Charles/Moncey):
+
+```python
+s_client = Synthax()
+a = s_client("factor 10403 and prove uniqueness")
+b = s_client("design a migration plan for PostgreSQL partitioning")
+print(a, b)           # run in parallel, resolve on read
+```
+
+Pipeline shape (the planner may skip stages per bucket):
+
+```
+ recall → plan → draft → render → adversary → revise → verify → arbiter → notify
+  ↑        ↑      ↑        ↑         ↑          ↑         ↑         ↑         ↑
+ Concierge Haiku  spec.   Architect  Sonnet    Json     Calc       Sonnet   Concierge
+ memory         (auma/    ASCII     cold       patch    exact      unified  writeback
+ search         science   diagram   attack     holes    arithmetic answer
+                /glass)
+```
+
+**Real receipt** — `Synthax("What is 6x7 and why is it the answer to life?", budget_usd=0.25)`:
+
+| Stage | Source | Time | Cost |
+|---|---|---:|---:|
+| recall | concierge | 72ms | $0.005 |
+| plan | haiku | 1,249ms | $0.003 |
+| draft | charles | 15,268ms | $0.010 |
+| render | — | — | skipped |
+| adversary | sonnet | 8,798ms | $0.015 — caught fake dataset |
+| revise | charles-json | 14,584ms | $0.010 — patched draft |
+| verify | — | — | skipped (no numeric claims) |
+| arbiter | sonnet | 9,007ms | $0.015 — TL;DR confidence=0.98 |
+| notify | concierge | 0ms | $0.005 |
+
+Total: **9 stages · 49s · $0.063 · confidence 0.98 · 2 residual doubts**.
+Budget hard-cap $0.25 was not exhausted; adversary caught a draft
+hallucination, revise cleaned it, arbiter delivered a 2-sentence TL;DR
+within 280 chars.
+
+`.replay(from_="revise", with_extra="...")` resumes the pipeline with
+altered context, reusing earlier artifacts as priors.
+
+---
+
+## Google — Web Search (v1.2.4)
+
+[![backend](https://img.shields.io/badge/backend-Claude%20web__search-facc15)](#google--web-search-v124)
+[![cost](https://img.shields.io/badge/cost-Bedrock%20tokens-ff9900)](#google--web-search-v124)
+
+Takes any text prompt, hits the live web, returns a Haiku-synthesized
+paragraph with inline `[1][2]` citations. `str(Google(q))` IS the
+synthesis, ready to feed downstream.
+
+```python
+from monceai import Google
+
+g = Google("prix verre 44.2 rTherm 2026")
+
+# Output
+str(g)            # "Le verre 44.2 rTherm se situe autour de ... [1][2]"
+g.results         # [{"title", "url", "snippet"}, ...]
+g.raw_html        # backend HTML (for debugging)
+g.search_ms       # search latency (before synthesis)
+g.result          # LLMResult with tokens + sat_memory
+```
+
+Client mode with lazy parallel futures:
+
+```python
+g = Google()
+a = g("Kissat SAT solver")
+b = g("monceai SDK")
+print(a, b)       # both resolve in parallel
+```
+
+Chain into Synthax for grounded deep reasoning (RAG in 3 lines):
+
+```python
+from monceai import Google, Synthax
+
+ctx = Google("current market price for 44.2 rTherm glass France 2026")
+s   = Synthax(f"Answer with sources and confidence: "
+              f"what should I quote a client for 20 units? "
+              f"Web context:\n{ctx}",
+              budget_usd=2.0)
+```
+
+---
+
+## Playground — No-Code Canvas
+
+[![live](https://img.shields.io/badge/live-monceapp.aws.monce.ai%2Fplayground-22c55e)](https://monceapp.aws.monce.ai/playground)
+[![mobile](https://img.shields.io/badge/mobile-friendly-8b5cf6)](https://monceapp.aws.monce.ai/playground)
+
+A drag-drop-connect canvas for every module in this SDK. Drop nodes,
+wire ports, hit Play. The right pane emits the exact Python that
+would produce the same result — copy, paste, run locally.
+
+`https://monceapp.aws.monce.ai/playground`
+
+**Features**
+- 10 module nodes: `Context`, `Charles`, `Moncey`, `Json`, `Matching`,
+  `Calc`, `Diff`, `Concierge`, `Architect`, `Synthax`, `Google`, `Arbiter`
+- **Fan-in**: a node can have multiple upstream parents, concatenated
+  under `[Label]` headers for LLM nodes
+- **Arbiter** node: Sonnet synthesizes N candidate answers into one,
+  citing `[Agent N]` per claim
+- **Colored ports** by payload type — text (blue) · document (red) ·
+  number (green) · web (yellow) · synth (purple)
+- **Live Python export** — the canvas and the exported snippet always
+  match, byte-for-byte
+- **Synthax pseudo** tab unfolds the 9-stage pipeline as linear Python
+- **Mobile-friendly**: horizontal palette strip, bottom drawer for
+  Python, tap-to-connect ports, pinch-zoom canvas, auto-compact boot
+  scene under 900px
+- **Shareable URL state**: every node position + edge serialized to
+  `?g=...` so graphs are pasteable
+
+The default boot scene is self-referential: *"Moncey, quelle est la
+feature #1 sur monceapp aujourd'hui ?"* fans out to Moncey, Matching,
+Concierge, Google, and Synthax in parallel, then an Arbiter weaves a
+single unified response — every part of the Monce stack collaborating
+on a meta-question.
 
 ---
 
