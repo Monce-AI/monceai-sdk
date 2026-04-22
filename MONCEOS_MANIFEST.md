@@ -9,6 +9,125 @@ os = MonceOS(factory_id=4, tenant="riou", framework_id="field_riou_test")
 
 ---
 
+## At a glance
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│                              M O N C E   O S                                │
+│                                                                             │
+│              from monceai import MonceOS                                    │
+│              os = MonceOS(factory_id=4, tenant="riou", framework_id=...)    │
+│                                                                             │
+└──────┬──────────────────┬──────────────────┬───────────────────┬────────────┘
+       │                  │                  │                   │
+       │  ONE CONSTRUCTOR — binds factory_id · tenant · framework · session   │
+       │                                                                     │
+       ▼                                                                     ▼
+
+┌─────────────────────────────── VERBS (iter ladder) ─────────────────────────┐
+│                                                                             │
+│  TIER 1 — credible Field V1 demo                               [2 days]     │
+│  ┌──────────────────┬──────────────────┬──────────────────────────────┐     │
+│  │  iter 1  ✓ LIVE  │  iter 2  ✓ LIVE  │  iter 3   planned            │     │
+│  │  _call           │  os.capture()    │  os.match.{client,contact,   │     │
+│  │  framework bind  │  → CR (typed)    │             article}         │     │
+│  └──────────────────┴──────────────────┴──────────────────────────────┘     │
+│  ┌──────────────────┬──────────────────┐                                    │
+│  │  iter 4 planned  │  iter 5 planned  │                                    │
+│  │  os.verify       │  os.store        │                                    │
+│  │  (Calc + dates)  │  (S3 / audit)    │                                    │
+│  └──────────────────┴──────────────────┘                                    │
+│                                                                             │
+│  TIER 2 — Field brick depends on these             [3-4 days, post-backend] │
+│  ┌──────────┬──────────┬──────────┐                                         │
+│  │  iter 6  │  iter 7  │  iter 8  │                                         │
+│  │ os.memory│ os.brief │ os.route │                                         │
+│  └──────────┴──────────┴──────────┘                                         │
+│                                                                             │
+│  TIER 3 — voice + export                                       [3 days]     │
+│  ┌──────────┬──────────┐                                                    │
+│  │  iter 9  │ iter 10  │                                                    │
+│  │ os.capt. │ os.export│                                                    │
+│  │ (audio)  │ pdf+email│                                                    │
+│  └──────────┴──────────┘                                                    │
+│                                                                             │
+│  TIER 4 — cross-brick                                          [2 days]     │
+│  ┌──────────┬──────────┐                                                    │
+│  │ iter 11  │ iter 12  │                                                    │
+│  │ agents + │ kpi +    │                                                    │
+│  │ session  │ observe  │                                                    │
+│  └──────────┴──────────┘                                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ composed on top of
+                                    ▼
+┌──────────────────────── SDK PRIMITIVES (untouched) ─────────────────────────┐
+│                                                                             │
+│  LLM · VLM · Json · Charles · Moncey · Architect · Concierge                │
+│  Matching (v2 rerank+arb) · Calc · Diff · LLMSession                        │
+│  Extraction · Outlook · Snake · SAT                                         │
+│                                                                             │
+└──────────────────────────────────┬──────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────── PROPRIETARY MONCE MODELS (default path) ─────────────────┐
+│                                                                             │
+│  charles-json   ──►  4-payload (haiku mem + haiku csv + haiku cnf           │
+│                       → Sonnet synthesis) — factory-scoped JSON extraction  │
+│                                                                             │
+│  moncey         ──►  glass domain sales agent (snake.aws/comprendre         │
+│                       + moncesuite classifiers + Haiku synthesis)           │
+│                                                                             │
+│  concierge      ──►  memory-grounded Q&A over factory data                  │
+│                                                                             │
+│  charles-arch.  ──►  ASCII / HTML diagrams                                  │
+│                                                                             │
+│  snake / SAT    ──►  classifier training · SAT solving (npdollars)          │
+│                                                                             │
+│  ─────────────  bare Haiku / Sonnet only when caller explicitly opts in     │
+│                                                                             │
+└──────────────────────────────────┬──────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌──────────────────────────────── INFRA ──────────────────────────────────────┐
+│                                                                             │
+│   monceapp.aws.monce.ai (t3.small · 8 workers · 100 concurrent)             │
+│   snake.aws / snakebatch.aws / npdollars.aws / claude.aws / data.aws        │
+│   AWS Bedrock eu-west-3 · S3 (tenant-partitioned, KMS)                      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+                                 ▲ verbs         ▼ pains
+
+┌────────────────────────── MAPPING TO FIELD V1 PAINS ────────────────────────┐
+│                                                                             │
+│   P1 reps don't fill CRM           ◄──  os.capture()         [iter 2 ✓]    │
+│   P2 5-min pre-visit panic         ◄──  os.brief + os.match  [iter 3, 7]   │
+│   P3 promises lost                 ◄──  cr.actions.owner_team + os.route   │
+│                                         (enum-clamped)       [iter 8]      │
+│   P4 directors fly blind           ◄──  cr.to_json() + os.kpi  [iter 12]   │
+│   P5 turnover = 6mo ramp-up        ◄──  os.store + os.memory  [iter 5, 6]  │
+│   P6 CRM tax                       ◄──  the whole loop  (rep writes 0)     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+┌────────────────────────── BRICKS (what this enables) ───────────────────────┐
+│                                                                             │
+│         Field            Orders          Quotes          Concierge          │
+│       (RIOU V1)         (existing)     (existing)          (app)            │
+│           ▲                ▲                ▲                ▲              │
+│           │                │                │                │              │
+│           └────────────────┴────── MonceOS ─┴────────────────┘              │
+│                         one kit, four consumers                             │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Why this exists
 
 The SDK primitives (`LLM`, `Json`, `Matching`, `Calc`, `Concierge`, `Moncey`,
