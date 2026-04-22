@@ -750,6 +750,7 @@ python examples/extract_pipeline.py a.pdf b.pdf order.eml --factory 3 \
 
 ## MonceOS — Brick Kit for Field, Orders, Quotes (v1.2.4)
 
+[![manifest](https://img.shields.io/badge/manifest-MONCEOS__MANIFEST.md-5b2a8e)](MONCEOS_MANIFEST.md)
 [![iter 1](https://img.shields.io/badge/iter%201-core%20+%20_call-22c55e)](monceai/monceos/core.py)
 [![iter 2](https://img.shields.io/badge/iter%202-os.capture-22c55e)](monceai/monceos/capture.py)
 [![iter 3](https://img.shields.io/badge/iter%203-os.match-94a3b8)](#roadmap)
