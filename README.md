@@ -3,6 +3,8 @@
 [![PyPI](https://img.shields.io/badge/pip%20install-monceai-3776AB?logo=python&logoColor=white)](https://github.com/Monce-AI/monceai-sdk)
 [![Version](https://img.shields.io/badge/version-v1.2.4-5b2a8e)](https://github.com/Monce-AI/monceai-sdk/releases)
 [![Synthax](https://img.shields.io/badge/Synthax-%2412%2Fquery%20flagship-c084fc)](#synthax--deep-reasoning-flagship-v124)
+[![Computation](https://img.shields.io/badge/Computation-SAT%20verified-10b981)](#computation--verified-compute-v125)
+[![ML](https://img.shields.io/badge/ML-Snake%20classifier-10b981)](#ml--context-driven-classifier-v125)
 [![Playground](https://img.shields.io/badge/Playground-drag%20drop%20connect-8b5cf6)](https://monceapp.aws.monce.ai/playground)
 [![MonceOS](https://img.shields.io/badge/MonceOS-v1.2.4-6d28d9)](#monceos--brick-kit-for-field-orders-quotes-v124)
 [![Matching v2](https://img.shields.io/badge/Matching-v2%20rerank+arbitration-0ea5e9)](#matching--universal-client--article-resolver-v123)
@@ -14,7 +16,7 @@
 [![License](https://img.shields.io/badge/license-proprietary-red)](LICENSE)
 [![Monce SAS](https://img.shields.io/badge/Monce-SAS-blue)](https://monce.ai)
 
-**LLM, VLM, Snake, SAT, Charles, Moncey, Architect, Json, Concierge, Matching, Calc, Diff, Synthax, Google — plus Extraction + Outlook for memory-augmented document workflows, and MonceOS for brick-ready composition. One SDK, zero config for chat.**
+**LLM, VLM, Snake, SAT, Charles, Moncey, Architect, Json, Concierge, Matching, Calc, Diff, Synthax, Google, Computation, ML — plus Extraction + Outlook for memory-augmented document workflows, and MonceOS for brick-ready composition. One SDK, zero config for chat.**
 
 ```python
 from monceai import Charles, Matching, Calc, Extraction, Outlook, Synthax
@@ -881,6 +883,104 @@ s   = Synthax(f"Answer with sources and confidence: "
 
 ---
 
+## Computation — Verified Compute (v1.2.5)
+
+[![backend](https://img.shields.io/badge/backend-npdollars%20%2F%20Kissat-10b981)](https://npdollars.aws.monce.ai)
+[![tokens](https://img.shields.io/badge/LLM%20tokens-0-22c55e)](#computation--verified-compute-v125)
+[![proof](https://img.shields.io/badge/output-SAT%20proof-6d28d9)](#computation--verified-compute-v125)
+
+Zero-LLM compute for prompts that have a deterministic answer. Detects
+factoring / raw DIMACS / pure arithmetic, builds the matching CNF or
+Decimal expression, dispatches to `npdollars.aws.monce.ai/solve` where
+Kissat runs the SAT, and returns the verified answer with a proof
+certificate.
+
+```python
+from monceai import Computation
+
+Computation("factor 10403")
+# → "10403 = 101 × 103"   (binary-multiplier CNF, Kissat, 0 tokens)
+
+Computation("factor 2027")
+# → "2027 is prime (UNSAT on binary-multiplier CNF)"
+
+Computation("6x7")
+# → "42"   (local Decimal, no network)
+
+Computation("p cnf 3 2\n1 2 0\n-1 3 0\n")
+# → "SAT assignment: [1, 2, 3]"   (raw DIMACS passthrough)
+
+# Non-matching prompts → empty string + .recognized = False
+c = Computation("explain gravity")
+c.recognized   # False
+```
+
+**Attributes:**
+- `str(c)` — the verified answer (or `""` if no pattern)
+- `c.recognized` — True if a computable pattern was detected
+- `c.pattern` — `"factor" | "dimacs" | "arith" | "coloring" | "none"`
+- `c.proof` — DIMACS header, SAT assignment, Kissat ms, etc.
+- `c.elapsed_ms`, `c.cost_usd`
+
+**How it works under the hood.** The factoring encoder builds a full
+binary-multiplier CNF via AND/XOR/full-adder gadgets (Dana-theorem
+polynomial construction): each bit of P × Q is a fresh SAT variable,
+column sums use ripple-carry adders, non-triviality is P ≥ 2 ∧ Q ≥ 2.
+The CNF is sent to Kissat on npdollars which returns either SAT (with
+an assignment we decode into P and Q) or UNSAT (N is prime).
+
+**v0 limits.** The binary-multiplier CNF exceeds the npdollars nginx
+413 body limit past ~16-bit N. Demo-sized numbers only; server-side
+streaming upload is the extension path.
+
+**Live receipts:**
+
+| Input | Wall | Result |
+|---|---:|---|
+| `Computation("factor 15")` | 156 ms | `15 = 3 × 5` (Kissat: 1.5 ms, 245 vars) |
+| `Computation("factor 2027")` | 417 ms | `2027 is prime (UNSAT)` |
+| `Computation("6x7")` | 0 ms | `42` (Decimal, no network) |
+
+Use as a parallel branch in Synthax: fire alongside the LLM draft,
+dismiss when `.recognized=False`, promote to winner when it's True —
+skipping adversary/revise/verify and saving tokens.
+
+---
+
+## ML — Context-Driven Classifier (v1.2.5)
+
+[![backend](https://img.shields.io/badge/backend-snakebatch%20Lambda-10b981)](https://snakebatch.aws.monce.ai)
+[![tokens](https://img.shields.io/badge/LLM%20tokens-0-22c55e)](#ml--context-driven-classifier-v125)
+
+Snake classification on data you supply inline. `ML` detects a CSV
+block in the prompt (header + ≥2 data rows) alongside a classify-shaped
+verb, trains a Snake via `snakebatch.aws.monce.ai/csv/run`, and returns
+`<class> (p=<confidence>)`.
+
+```python
+from monceai import ML
+
+r = ML('''Classify: is (5.1, 3.5, 1.4, 0.2) a setosa?
+
+sepal_length,sepal_width,petal_length,petal_width,species
+5.1,3.5,1.4,0.2,setosa
+4.9,3.0,1.4,0.2,setosa
+7.0,3.2,4.7,1.4,versicolor
+6.4,3.2,4.5,1.5,versicolor
+''')
+
+str(r)           # "setosa (p=0.97)"
+r.prediction     # "setosa"
+r.confidence     # 0.97
+r.proof          # Snake audit trail: model_id, literal tests
+```
+
+No CSV → `r.recognized = False`. Used by Synthax as a parallel branch
+for prompts that smell like "predict / classify / is X a Y given this
+data", same early-exit semantics as `Computation`.
+
+---
+
 ## Playground — No-Code Canvas
 
 [![live](https://img.shields.io/badge/live-monceapp.aws.monce.ai%2Fplayground-22c55e)](https://monceapp.aws.monce.ai/playground)
@@ -893,14 +993,29 @@ would produce the same result — copy, paste, run locally.
 `https://monceapp.aws.monce.ai/playground`
 
 **Features**
-- 10 module nodes: `Context`, `Charles`, `Moncey`, `Json`, `Matching`,
-  `Calc`, `Diff`, `Concierge`, `Architect`, `Synthax`, `Google`, `Arbiter`
+- 13 module nodes: `Context`, `Charles`, `Moncey`, `Json`, `Matching`,
+  `Calc`, `Diff`, `Concierge`, `Architect`, `Google`, `Synthax`,
+  `Computation`, `ML`, `Arbiter`
 - **Fan-in**: a node can have multiple upstream parents, concatenated
   under `[Label]` headers for LLM nodes
 - **Arbiter** node: Sonnet synthesizes N candidate answers into one,
   citing `[Agent N]` per claim
 - **Colored ports** by payload type — text (blue) · document (red) ·
-  number (green) · web (yellow) · synth (purple)
+  number (green) · web (yellow) · proof (emerald) · synth (purple)
+- **Live SSE streaming**: each node paints green the instant it
+  completes — Calc's 87 ms answer appears 4 s before Concierge's
+  4075 ms answer on a parallel fan-out
+- **Server-side parallelism**: independent nodes at the same topological
+  level run concurrently (ThreadPoolExecutor, max 8 workers)
+- **Canvas pan**: drag empty space to move the viewport; ⊙ Reset view
+  snaps back to origin
+- **Templates**: 6 golden one-tap graphs (Monce Stack · Glass Quote ·
+  Ramanujan 1729 · Raw vs Monce · RAG in 3 Nodes · Synthax Flex)
+- **Save / Load** user graphs to localStorage; **Import .py** parses
+  any snippet of `monceai` calls into a graph via the server's AST
+  parser at `POST /playground/import`
+- **Draft auto-save**: every canvas mutation persists to localStorage,
+  no reload can lose your work
 - **Live Python export** — the canvas and the exported snippet always
   match, byte-for-byte
 - **Synthax pseudo** tab unfolds the 9-stage pipeline as linear Python
