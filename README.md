@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/license-proprietary-red)](LICENSE)
 [![Monce SAS](https://img.shields.io/badge/Monce-SAS-blue)](https://monce.ai)
 
-**LLM, VLM, Snake, SAT, Charles, Moncey, Architect, Json, Concierge, Matching, Calc, Diff — plus Extraction + Outlook for memory-augmented document workflows. One SDK, zero config for chat.**
+**LLM, VLM, Snake, SAT, Charles, Moncey, Architect, Json, Concierge, Matching, Calc, Diff — plus Extraction + Outlook for memory-augmented document workflows, and MonceOS for brick-ready composition. One SDK, zero config for chat.**
 
 ```python
 from monceai import Charles, Matching, Calc, Extraction, Outlook
@@ -723,6 +723,83 @@ python examples/extract_pipeline.py quote.pdf --factory 4 --user-id 7a3f9b2c
 python examples/extract_pipeline.py a.pdf b.pdf order.eml --factory 3 \
     --user-id 7a3f9b2c --json
 ```
+
+---
+
+## MonceOS — Brick Kit for Field, Orders, Quotes (v1.2.4)
+
+The OS layer. One constructor binds `factory_id`, `tenant`, and `framework_id`
+for the session. Every verb routes through the proprietary Monce models
+(`charles-json`, `moncey`, `concierge`) — never bare Haiku/Sonnet.
+
+```python
+from monceai import MonceOS
+
+os = MonceOS(factory_id=4, tenant="riou", framework_id="field_riou_test")
+
+# Voice/transcript → typed, validated CR (charles-json, 4-payload Monce model)
+cr = os.capture(transcript=stt_output, today="2026-04-22")
+cr.summary                    # 2-3 sentences
+cr.actions                    # [Action] — enum-clamped owner_team, deadline, amount_eur
+cr.contacts_met               # [Contact] — is_new flagged
+cr.sentiment                  # "positive" | "neutral" | "negative"
+cr.next_step                  # NextStep(what, when)
+cr.to_json()                  # schema-stable dashboard payload
+```
+
+### What MonceOS is for
+
+A brick kit for Monce OS bricks (Field, Orders, Quotes, Concierge). The SDK
+primitives (LLM, Json, Matching, Calc, Concierge, Moncey) stay untouched;
+MonceOS composes them into verbs that bricks consume without re-wiring
+factory scoping, framework binding, or model selection on every call.
+
+### The four lines — Monce Field V1 AI stack
+
+```python
+from monceai import MonceOS
+
+os = MonceOS(factory_id=4, tenant="riou", framework_id="field_riou_test")
+cr = os.capture(transcript=stt_output)         # ~10s, typed, validated
+for a in cr.actions: route_to_team(a)          # enum → inbox
+save_to_s3(cr.to_json())                       # tenant-scoped, permanent
+```
+
+### Typed contract (`CR`, `Action`, `Contact`, `NextStep`)
+
+- `owner_team` ∈ `{sales_ops, service, quoting, logistics}` — enum-clamped; model drift mapped to valid vocab
+- `priority` ∈ `{high, medium, low}`
+- `sentiment` ∈ `{positive, neutral, negative}`
+- `amount_eur` is number-or-null, never string
+- `deadline` / `next_step.when` in ISO 8601 (computed from `today=`)
+- Guard: `{"error": "recording_too_short"}` for <30s usable speech
+
+### Runnable demo
+
+```bash
+python examples/field_flow.py
+```
+
+Full loop against live factory 4 (VIP / RIOU Glass): capture → route → match
+client `ACTIF PVC (#55298)` → verify arithmetic via `Calc` → agents
+(`Moncey`, `Concierge`) for glass decode and account Q&A. ~27s end-to-end.
+
+### Roadmap
+
+| Iter | Verb | Status |
+|------|------|--------|
+| 1    | `MonceOS._call` + framework binding | ✓ v1.2.4 |
+| 2    | `os.capture(transcript=...)` + `CR` | ✓ v1.2.4 |
+| 3    | `os.match.client` + `is_new` diff | — |
+| 4    | `os.verify.amount` / `.date` (wraps Calc) | — |
+| 5    | `os.store` — S3 persistence, audit log | — |
+| 6    | `os.memory` — Concierge + CSV fallback | — |
+| 7    | `os.brief(account_id)` | — |
+| 8    | `os.route(actions)` — Snake team classifier | — |
+| 9    | `os.capture(audio_bytes=...)` — STT | — |
+| 10   | `os.export.pdf` / `.email` | — |
+| 11   | `os.agents.*` + `os.session` | — |
+| 12   | `os.kpi.*` + `os.observe.*` | — |
 
 ---
 
