@@ -1,7 +1,9 @@
 # monceai
 
 [![PyPI](https://img.shields.io/badge/pip%20install-monceai-3776AB?logo=python&logoColor=white)](https://github.com/Monce-AI/monceai-sdk)
-[![Version](https://img.shields.io/badge/version-v1.2.0-5b2a8e)](https://github.com/Monce-AI/monceai-sdk/releases)
+[![Version](https://img.shields.io/badge/version-v1.2.4-5b2a8e)](https://github.com/Monce-AI/monceai-sdk/releases)
+[![MonceOS](https://img.shields.io/badge/MonceOS-v1.2.4-6d28d9)](#monceos--brick-kit-for-field-orders-quotes-v124)
+[![Matching v2](https://img.shields.io/badge/Matching-v2%20rerank+arbitration-0ea5e9)](#matching--universal-client--article-resolver-v123)
 [![Snake v5.4.5](https://img.shields.io/badge/Snake-v5.4.5-black)](https://github.com/Monce-AI/algorithmeai-snake)
 [![AWS Lambda](https://img.shields.io/badge/backend-AWS%20Lambda-FF9900?logo=awslambda&logoColor=white)](https://snakebatch.aws.monce.ai)
 [![AWS Bedrock](https://img.shields.io/badge/AWS-Bedrock-ff9900?logo=amazonaws&logoColor=white)](https://aws.amazon.com/bedrock/)
@@ -268,6 +270,14 @@ r2 = s.send("what is my name?")   # remembers context
 
 ## Matching — Universal Client & Article Resolver (v1.2.3)
 
+[![top-1 CPU](https://img.shields.io/badge/top--1%20(CPU%20only)-73.7%25-22c55e)](#benchmark--factory-4-vip-april-2026)
+[![top-1 LLM](https://img.shields.io/badge/top--1%20(+LLM%20arb)-85.3%25-22c55e)](#benchmark--factory-4-vip-april-2026)
+[![vs hosted](https://img.shields.io/badge/vs%20hosted%20cascade-%2B45pp-0ea5e9)](#benchmark--factory-4-vip-april-2026)
+[![zero tokens](https://img.shields.io/badge/CPU%20path-0%20tokens-6d28d9)](#matching--universal-client--article-resolver-v123)
+[![single](https://img.shields.io/badge/single-~80ms-6d28d9)](#live-timings-factory-4)
+[![batch x3](https://img.shields.io/badge/batch%20x3-~70ms-6d28d9)](#live-timings-factory-4)
+[![modes](https://img.shields.io/badge/modes-article%20%7C%20client%20%7C%20doc%20%7C%20auto%20%7C%20batch-94a3b8)](#matching--universal-client--article-resolver-v123)
+
 Constructor-to-resolution: `Matching(arg, ...)` blocks and *is* the result.
 Four input forms, one class, no fuzzy. `/batch` and `/batch_client` on
 snake.aws are the source of truth; snake's own candidate list is re-ranked
@@ -356,6 +366,18 @@ Benchmark source: `bench_matching.py`.
 Article fields for explicit `field=`: `verre`, `verre1`, `verre2`, `verre3`,
 `intercalaire`, `intercalaire1`, `intercalaire2`, `remplissage`, `gaz`,
 `faconnage`, `façonnage_arete`, `global`.
+
+### Live timings — factory 4
+
+From `from monceai import Matching`, measured against live `snake.aws`:
+
+| Call | Wall clock | Tokens |
+|------|-----------:|-------:|
+| `Matching("44.2 rTherm", field="verre", factory_id=4)`       | **86 ms** | 0 |
+| `Matching("ACTIF PVC", factory_id=4)` — client path          | **41 ms** | 0 |
+| `Matching(["44.2 rTherm", "16 TPS noir", "Argon"], f=4)`     | **69 ms** (3 queries) | 0 |
+| `Matching("SGG Planitherm", factory_id=4)` — auto client+article race | **78 ms** | 0 |
+| Reusable `m = Matching(f=4); m(q1); m(q2)` — 2 parallel      | **46 ms** | 0 |
 
 ## Monolith Chat Models (v1.1.0)
 
@@ -728,6 +750,24 @@ python examples/extract_pipeline.py a.pdf b.pdf order.eml --factory 3 \
 
 ## MonceOS — Brick Kit for Field, Orders, Quotes (v1.2.4)
 
+[![iter 1](https://img.shields.io/badge/iter%201-core%20+%20_call-22c55e)](monceai/monceos/core.py)
+[![iter 2](https://img.shields.io/badge/iter%202-os.capture-22c55e)](monceai/monceos/capture.py)
+[![iter 3](https://img.shields.io/badge/iter%203-os.match-94a3b8)](#roadmap)
+[![iter 4](https://img.shields.io/badge/iter%204-os.verify-94a3b8)](#roadmap)
+[![iter 5](https://img.shields.io/badge/iter%205-os.store-94a3b8)](#roadmap)
+[![iter 6](https://img.shields.io/badge/iter%206-os.memory-94a3b8)](#roadmap)
+[![iter 7](https://img.shields.io/badge/iter%207-os.brief-94a3b8)](#roadmap)
+[![iter 8](https://img.shields.io/badge/iter%208-os.route-94a3b8)](#roadmap)
+[![iter 9](https://img.shields.io/badge/iter%209-os.capture(audio)-94a3b8)](#roadmap)
+[![iter 10](https://img.shields.io/badge/iter%2010-os.export-94a3b8)](#roadmap)
+[![iter 11](https://img.shields.io/badge/iter%2011-os.agents-94a3b8)](#roadmap)
+[![iter 12](https://img.shields.io/badge/iter%2012-os.kpi%20+%20observe-94a3b8)](#roadmap)
+
+**Powered by proprietary Monce models:**
+[![charles-json](https://img.shields.io/badge/charles--json-4--payload-6d28d9)](https://monceapp.aws.monce.ai/charles-json)
+[![moncey](https://img.shields.io/badge/moncey-glass%20agent-6d28d9)](https://monceapp.aws.monce.ai/moncey)
+[![concierge](https://img.shields.io/badge/concierge-account%20memory-6d28d9)](https://monceapp.aws.monce.ai/concierge)
+
 The OS layer. One constructor binds `factory_id`, `tenant`, and `framework_id`
 for the session. Every verb routes through the proprietary Monce models
 (`charles-json`, `moncey`, `concierge`) — never bare Haiku/Sonnet.
@@ -786,20 +826,20 @@ client `ACTIF PVC (#55298)` → verify arithmetic via `Calc` → agents
 
 ### Roadmap
 
-| Iter | Verb | Status |
-|------|------|--------|
-| 1    | `MonceOS._call` + framework binding | ✓ v1.2.4 |
-| 2    | `os.capture(transcript=...)` + `CR` | ✓ v1.2.4 |
-| 3    | `os.match.client` + `is_new` diff | — |
-| 4    | `os.verify.amount` / `.date` (wraps Calc) | — |
-| 5    | `os.store` — S3 persistence, audit log | — |
-| 6    | `os.memory` — Concierge + CSV fallback | — |
-| 7    | `os.brief(account_id)` | — |
-| 8    | `os.route(actions)` — Snake team classifier | — |
-| 9    | `os.capture(audio_bytes=...)` — STT | — |
-| 10   | `os.export.pdf` / `.email` | — |
-| 11   | `os.agents.*` + `os.session` | — |
-| 12   | `os.kpi.*` + `os.observe.*` | — |
+| Iter | Verb | What it unlocks | Status |
+|------|------|-----------------|--------|
+| 1    | `MonceOS._call` + framework binding       | any brick can POST with tenant scope | ![](https://img.shields.io/badge/live-v1.2.4-22c55e) |
+| 2    | `os.capture(transcript=...)` + `CR`       | Field's 5-extraction contract          | ![](https://img.shields.io/badge/live-v1.2.4-22c55e) |
+| 3    | `os.match.client` + `is_new` diff         | contacts resolved against factory table | ![](https://img.shields.io/badge/next-planned-f59e0b) |
+| 4    | `os.verify.amount` / `.date`              | NP-verified arithmetic + dates         | ![](https://img.shields.io/badge/planned--94a3b8) |
+| 5    | `os.store` — S3 persistence + audit log   | permanency, GDPR delete                | ![](https://img.shields.io/badge/planned--94a3b8) |
+| 6    | `os.memory` — Concierge + CSV fallback    | integrated + standalone mode           | ![](https://img.shields.io/badge/planned--94a3b8) |
+| 7    | `os.brief(account_id)`                    | Field screen 2 — pre-visit brief       | ![](https://img.shields.io/badge/planned--94a3b8) |
+| 8    | `os.route(actions)` — Snake classifier    | Field action plan routing              | ![](https://img.shields.io/badge/planned--94a3b8) |
+| 9    | `os.capture(audio_bytes=...)` — STT       | full voice pipeline (Deepgram/Whisper) | ![](https://img.shields.io/badge/planned--94a3b8) |
+| 10   | `os.export.pdf` / `.email`                | Field screen 4 — PDF + SES             | ![](https://img.shields.io/badge/planned--94a3b8) |
+| 11   | `os.agents.*` + `os.session`              | V1.5 concierge chat, multi-turn state  | ![](https://img.shields.io/badge/planned--94a3b8) |
+| 12   | `os.kpi.*` + `os.observe.*`               | director dashboard + SLO alerts        | ![](https://img.shields.io/badge/planned--94a3b8) |
 
 ---
 
