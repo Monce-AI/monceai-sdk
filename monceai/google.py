@@ -58,19 +58,36 @@ _DEFAULT_TIMEOUT = 10
 
 def _google_search(query: str, num: int = _DEFAULT_NUM,
                    timeout: int = _DEFAULT_TIMEOUT) -> tuple[list, str]:
-    """Hit the no-JS DuckDuckGo HTML endpoint (backend for the public
-    ``Google()`` class), return (results, raw_html).
+    """Search the web via fallback chain, return (results, raw_html).
 
-    results = [{'title': ..., 'url': ..., 'snippet': ...}, ...]
+    Why not google.com/search directly: Google serves a JS-only shell
+    to non-interactive clients — plain requests.get returns 90KB of
+    scaffolding with zero rendered results. So we route through
+    search backends that do serve usable HTML to plain requests:
 
-    Why DDG: google.com/search serves a JS-only shell to non-interactive
-    clients — requests.get returns 90KB of scaffolding with zero results.
-    DDG's html.duckduckgo.com/html/ returns actual SERP HTML to a plain
-    requests.post with no JS, no consent wall, no API key. Same shape,
-    it works. The public class stays named ``Google`` because the
-    user-facing intent is "search the web" regardless of backend —
-    swappable to Brave/Serper later behind the same interface.
+        1. DuckDuckGo HTML endpoint (best quality, clean parsing)
+        2. Bing HTML fallback (when DDG rate-limits the IP — common
+           from AWS/GCP/Azure ranges that DDG flags as bot traffic)
+
+    The public class stays named ``Google`` — the intent is "search
+    the web" regardless of which backend answered. Swappable to
+    Brave/Serper later behind the same interface.
     """
+    # Try DDG first
+    results, html = _ddg_search(query, num=num, timeout=timeout)
+    if results:
+        return results, html
+
+    # Fallback to Bing — tolerates datacenter IPs far better than DDG
+    results_b, html_b = _bing_search(query, num=num, timeout=timeout)
+    if results_b:
+        return results_b, html_b
+
+    # Return whatever we had for debugging
+    return [], html or html_b
+
+
+def _ddg_search(query: str, num: int, timeout: int) -> tuple[list, str]:
     url = "https://html.duckduckgo.com/html/"
     data = {"q": query, "kl": "fr-fr"}
     headers = {
@@ -81,13 +98,66 @@ def _google_search(query: str, num: int = _DEFAULT_NUM,
     try:
         resp = requests.post(url, data=data, headers=headers, timeout=timeout)
     except requests.RequestException as e:
-        return [], f"<error: {e}>"
-
+        return [], f"<ddg-error: {e}>"
     html = resp.text or ""
     if resp.status_code != 200:
         return [], html
-
     return _parse_ddg_html(html, num), html
+
+
+def _bing_search(query: str, num: int, timeout: int) -> tuple[list, str]:
+    url = "https://www.bing.com/search"
+    params = {"q": query, "setlang": "fr", "count": num}
+    headers = {
+        "User-Agent": _USER_AGENT,
+        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+    }
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+    except requests.RequestException as e:
+        return [], f"<bing-error: {e}>"
+    html = resp.text or ""
+    if resp.status_code != 200:
+        return [], html
+    return _parse_bing_html(html, num), html
+
+
+_BING_RESULT_RX = re.compile(
+    r'<li class="b_algo"[^>]*>.*?'
+    r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>\s*</h2>'
+    r'.*?<(?:p|div)[^>]*class="[^"]*b_(?:caption|snippet)[^"]*"[^>]*>(.*?)</(?:p|div)>',
+    re.DOTALL,
+)
+_BING_TITLE_ONLY_RX = re.compile(
+    r'<li class="b_algo"[^>]*>.*?'
+    r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+    re.DOTALL,
+)
+
+
+def _parse_bing_html(html: str, num: int) -> list[dict]:
+    results: list[dict] = []
+    seen: set[str] = set()
+    for m in _BING_RESULT_RX.finditer(html):
+        url = _unwrap_bing_redirect(m.group(1))
+        title, snippet = _strip_tags(m.group(2)), _strip_tags(m.group(3))
+        if not url.startswith(("http://", "https://")) or url in seen:
+            continue
+        seen.add(url)
+        results.append({"title": title, "url": url, "snippet": snippet})
+        if len(results) >= num:
+            break
+    if not results:
+        for m in _BING_TITLE_ONLY_RX.finditer(html):
+            url = _unwrap_bing_redirect(m.group(1))
+            title = _strip_tags(m.group(2))
+            if not url.startswith(("http://", "https://")) or url in seen:
+                continue
+            seen.add(url)
+            results.append({"title": title, "url": url, "snippet": ""})
+            if len(results) >= num:
+                break
+    return results
 
 
 _DDG_RESULT_RX = re.compile(
@@ -104,6 +174,29 @@ _DDG_TITLE_ONLY_RX = re.compile(
 
 def _strip_tags(s: str) -> str:
     return re.sub(r"<[^>]+>", "", unescape(s or "")).strip()
+
+
+def _unwrap_bing_redirect(url: str) -> str:
+    """Bing wraps external links as bing.com/ck/a?...&u=a1<base64>&...
+    Unwrap the base64'd real URL."""
+    if "bing.com/ck/" not in url:
+        return url
+    try:
+        from urllib.parse import urlparse, parse_qs
+        import base64
+        clean = url.replace("&amp;", "&")
+        qs = parse_qs(urlparse(clean).query)
+        enc = (qs.get("u") or [""])[0]
+        if enc.startswith("a1"):
+            enc = enc[2:]
+        if enc:
+            # add padding
+            decoded = base64.b64decode(enc + "===").decode("utf-8", errors="ignore")
+            if decoded.startswith(("http://", "https://")):
+                return decoded
+    except Exception:
+        pass
+    return url
 
 
 def _unwrap_ddg_redirect(url: str) -> str:
