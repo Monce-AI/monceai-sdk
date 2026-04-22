@@ -46,3 +46,5 @@ from .outlook import Outlook
 from .monceos import MonceOS
 from .synthax import Synthax, SynthaxJob, Stage
 from .google import Google
+from .compute import Computation
+from .mlclass import ML
