@@ -13,6 +13,7 @@ Free (no API key):
     Architect  — ASCII schemas / diagrams via charles-architect. v1.2.2
 
     Extraction — Memory-augmented file extraction. v1.2.0
+    Document   — File + prompt → answer. Wraps Charles/Concierge/Json.
     Outlook    — Email / Outlook workflow (extract + recall + remember). v1.2.0
 
 API key required (SNAKE_API_KEY / SAT_API_KEY):
@@ -42,6 +43,7 @@ from .matching import (
 )
 from .report import generate_report
 from .extraction import Extraction
+from .document import Document
 from .outlook import Outlook
 from .monceos import MonceOS
 from .synthax import Synthax, SynthaxJob, Stage

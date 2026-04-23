@@ -6,6 +6,7 @@
 [![Computation](https://img.shields.io/badge/Computation-SAT%20verified-10b981)](#computation--verified-compute-v125)
 [![ML](https://img.shields.io/badge/ML-Snake%20classifier-10b981)](#ml--context-driven-classifier-v125)
 [![Playground](https://img.shields.io/badge/Playground-drag%20drop%20connect-8b5cf6)](https://monceapp.aws.monce.ai/playground)
+[![Document](https://img.shields.io/badge/Document-drop%20%C2%B7%20ask%20%C2%B7%20extract-ef4444)](#document--drop-a-file-ask-a-question-v125)
 [![MonceOS](https://img.shields.io/badge/MonceOS-v1.2.4-6d28d9)](#monceos--brick-kit-for-field-orders-quotes-v124)
 [![Matching v2](https://img.shields.io/badge/Matching-v2%20rerank+arbitration-0ea5e9)](#matching--universal-client--article-resolver-v123)
 [![Snake v5.4.5](https://img.shields.io/badge/Snake-v5.4.5-black)](https://github.com/Monce-AI/algorithmeai-snake)
@@ -247,6 +248,53 @@ j = Json("3 colors with hex")
 j["colors"]                        # list access
 print(j)                           # json.dumps(indent=2)
 ```
+
+## Document — Drop a File, Ask a Question (v1.2.5)
+
+[![Drop a file](https://img.shields.io/badge/input-PDF%20%C2%B7%20XLSX%20%C2%B7%20image%20%C2%B7%20text-ef4444)](#document--drop-a-file-ask-a-question-v125)
+[![Routes through](https://img.shields.io/badge/routes-Charles%20%C2%B7%20Concierge%20%C2%B7%20Json-6d28d9)](#document--drop-a-file-ask-a-question-v125)
+[![Playground](https://img.shields.io/badge/Playground-node%20ready-8b5cf6)](https://monceapp.aws.monce.ai/playground)
+
+A file + a question, one line. `Document` wraps the charles family
+(`Charles` / `Concierge` / `charles-json`) behind a single ergonomic surface.
+Pass `prompt=` at construction and `str(doc)` is the answer.
+
+```python
+from monceai import Document
+
+# One-shot — file + prompt → str via __str__
+answer = str(Document("quote.pdf", prompt="what's the intercalaire?"))
+# → "44.2 rTherm with 16mm TPS noir, per the VIP cloisonneur profile…"
+
+# Multi-question — instantiate once, ask many times
+doc = Document("spec.xlsx")
+doc.ask("what's the total number of lines?")
+doc.ask("any deadline mentioned?", model="concierge")   # memory-backed
+doc.extract("list all glass lines as JSON")             # → dict via Json
+
+# Concierge mode — binary files are pre-transcribed through charles-json,
+# then the extracted text is handed to Concierge for a memory-backed answer.
+str(Document("devis_VIP.pdf",
+             prompt="is this the usual pattern for this client?",
+             model="concierge"))
+```
+
+Accepts paths, `pathlib.Path`, raw bytes, or any file-like with `.read()`.
+Text-like payloads (`.txt`, `.md`, `.csv`, `.json`…) are inlined into the
+prompt; binaries (`.pdf`, `.xlsx`, `.png`, `.docx`…) go out as multipart.
+
+**Playground integration.** Drag the red **Document** chip onto the canvas —
+or just drop a file anywhere on the canvas and a Document node is spawned
+at the drop point with the file pre-attached. Wire its output into any
+downstream `Charles` / `Concierge` / `Arbiter` node.
+
+| Mode | Backend | Best for |
+|------|---------|----------|
+| `model="charles"` (default) | charles-json via Charles auto-routing | Single questions, VLM included |
+| `model="concierge"` | charles-json → Concierge | Memory-backed answers on documents |
+| `model="charles-json"` | charles-json direct | Structured JSON / `.extract()` workflows |
+
+Lives at [monceapp.aws.monce.ai/playground](https://monceapp.aws.monce.ai/playground).
 
 ## Concierge — Monce Knowledge Base
 
