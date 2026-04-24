@@ -57,7 +57,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Iterable, Optional, Union
 
-from .llm import LLM, VLM, _guess_content_type
+from .llm import LLM, VLM, _guess_content_type, _chat
 
 
 _VLM_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff",
@@ -109,14 +109,60 @@ _EXTRACT_PROMPT = (
 )
 
 
+def _pdf_first_page_png(data: bytes, dpi: int = 150) -> Optional[bytes]:
+    """Rasterize the first page of a PDF to PNG. Returns None if fitz
+    isn't installed or rendering fails."""
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        return None
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+        if doc.page_count == 0:
+            return None
+        page = doc.load_page(0)
+        zoom = dpi / 72
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        png = pix.tobytes("png")
+        doc.close()
+        return png
+    except Exception:
+        return None
+
+
 def _extract_one(name: str, data: bytes, kind: str,
                  factory_id: int, timeout: int) -> str:
     try:
         if kind == "image":
-            r = VLM(_EXTRACT_PROMPT, image=data,
-                    image_type=_guess_content_type(name),
-                    factory_id=factory_id, json=False, timeout=timeout)
-            return f"--- {name} ---\n{getattr(r, 'text', '')[:1200]}"
+            # PDFs: the monceapp /v1/chat gateway doesn't forward PDF bytes
+            # to Bedrock (its MEDIA_TYPES map is image-only). Render page 1
+            # client-side to PNG so the VLM path works uniformly.
+            ext = name.lower().rsplit(".", 1)[-1] if "." in name else ""
+            if ext == "pdf":
+                png = _pdf_first_page_png(data)
+                if png is not None:
+                    data = png
+                    name = name.rsplit(".", 1)[0] + ".png"
+
+            try:
+                r = VLM(_EXTRACT_PROMPT, image=data,
+                        image_type=_guess_content_type(name),
+                        factory_id=factory_id, json=False, timeout=timeout)
+                text = getattr(r, "text", "") or ""
+            except Exception as e:
+                text = f"VLM error: {e}"
+
+            if "Model unavailable" in text or not text.strip():
+                # Last-resort fallback via multipart upload
+                try:
+                    r2 = _chat(text=_EXTRACT_PROMPT, model="charles-json",
+                               factory_id=factory_id, timeout=timeout,
+                               file=data, filename=name, as_json=False)
+                    text = getattr(r2, "text", "") or text
+                except Exception:
+                    pass
+
+            return f"--- {name} ---\n{text[:1500]}"
         # text
         txt = data.decode("utf-8", "replace")[:1500]
         return f"--- {name} ---\n{txt}"
@@ -234,7 +280,7 @@ class Classifier:
         factory_id: int = 0,
         timeout: int = 30,
         fast_timeout: int = 12,
-        extract_timeout: int = 8,
+        extract_timeout: int = 25,
         extras: Optional[dict] = None,
         parallel: int = 4,
         fast_model: str = "charles-json",

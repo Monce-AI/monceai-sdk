@@ -24,7 +24,7 @@ API key required (SNAKE_API_KEY / SAT_API_KEY):
     generate_report — Build HTML/PDF reports from model results.
 """
 
-__version__ = "1.2.5"
+__version__ = "1.2.6"
 
 from .snake import Snake
 from .sat import SAT, SATSession, SATResult, SATProof

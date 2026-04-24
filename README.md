@@ -1,7 +1,7 @@
 # monceai
 
 [![PyPI](https://img.shields.io/badge/pip%20install-monceai-3776AB?logo=python&logoColor=white)](https://github.com/Monce-AI/monceai-sdk)
-[![Version](https://img.shields.io/badge/version-v1.2.5-5b2a8e)](https://github.com/Monce-AI/monceai-sdk/releases)
+[![Version](https://img.shields.io/badge/version-v1.2.6-5b2a8e)](https://github.com/Monce-AI/monceai-sdk/releases)
 [![Synthax](https://img.shields.io/badge/Synthax-%2412%2Fquery%20flagship-c084fc)](#synthax--deep-reasoning-flagship-v124)
 [![Computation](https://img.shields.io/badge/Computation-SAT%20verified-10b981)](#computation--verified-compute-v125)
 [![ML](https://img.shields.io/badge/ML-Snake%20classifier-10b981)](#ml--context-driven-classifier-v125)
@@ -1125,6 +1125,16 @@ The four tentative verdicts are the mechanism paying out: Phase 2
 returned unparseable text on those samples and the Phase 1 preview —
 already correct — was promoted automatically. Without the fallback
 they would have been `"informative" / 0%` defaults.
+
+### PDF support (v1.2.6)
+
+PDFs are rasterized client-side to PNG (first page, 150 DPI) before the
+VLM call. The monceapp `/v1/chat` gateway only forwards images to
+Bedrock — raw PDF bytes get dropped silently. Requires `PyMuPDF`
+(`pip install pymupdf`); if unavailable, PDFs fall back to a multipart
+upload attempt. Real-world PDF VLM extraction runs 14-22s, so the
+default `extract_timeout` is **25s** and effective `timeout` should be
+**≥45s** when you pass PDFs.
 
 ### Why `charles-json` on both phases
 
