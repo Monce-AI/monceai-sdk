@@ -1,12 +1,13 @@
 # monceai
 
 [![PyPI](https://img.shields.io/badge/pip%20install-monceai-3776AB?logo=python&logoColor=white)](https://github.com/Monce-AI/monceai-sdk)
-[![Version](https://img.shields.io/badge/version-v1.2.4-5b2a8e)](https://github.com/Monce-AI/monceai-sdk/releases)
+[![Version](https://img.shields.io/badge/version-v1.2.5-5b2a8e)](https://github.com/Monce-AI/monceai-sdk/releases)
 [![Synthax](https://img.shields.io/badge/Synthax-%2412%2Fquery%20flagship-c084fc)](#synthax--deep-reasoning-flagship-v124)
 [![Computation](https://img.shields.io/badge/Computation-SAT%20verified-10b981)](#computation--verified-compute-v125)
 [![ML](https://img.shields.io/badge/ML-Snake%20classifier-10b981)](#ml--context-driven-classifier-v125)
 [![Playground](https://img.shields.io/badge/Playground-drag%20drop%20connect-8b5cf6)](https://monceapp.aws.monce.ai/playground)
 [![Document](https://img.shields.io/badge/Document-drop%20%C2%B7%20ask%20%C2%B7%20extract-ef4444)](#document--drop-a-file-ask-a-question-v125)
+[![Classifier](https://img.shields.io/badge/Classifier-two%20phase%20triage-f59e0b)](#classifier--fast-n-label-triage-v125)
 [![MonceOS](https://img.shields.io/badge/MonceOS-v1.2.4-6d28d9)](#monceos--brick-kit-for-field-orders-quotes-v124)
 [![Matching v2](https://img.shields.io/badge/Matching-v2%20rerank+arbitration-0ea5e9)](#matching--universal-client--article-resolver-v123)
 [![Snake v5.4.5](https://img.shields.io/badge/Snake-v5.4.5-black)](https://github.com/Monce-AI/algorithmeai-snake)
@@ -1026,6 +1027,133 @@ r.proof          # Snake audit trail: model_id, literal tests
 No CSV → `r.recognized = False`. Used by Synthax as a parallel branch
 for prompts that smell like "predict / classify / is X a Y given this
 data", same early-exit semantics as `Computation`.
+
+---
+
+## Classifier — Fast N-Label Triage (v1.2.5)
+
+[![two phase](https://img.shields.io/badge/pipeline-Haiku%20preview%20%E2%86%92%20Sonnet%20verdict-f59e0b)](#classifier--fast-n-label-triage-v125)
+[![timeout](https://img.shields.io/badge/timeout-%E2%89%A430s%20guaranteed-22c55e)](#classifier--fast-n-label-triage-v125)
+[![never hangs](https://img.shields.io/badge/never-hangs%20or%20raises-22c55e)](#classifier--fast-n-label-triage-v125)
+[![backend](https://img.shields.io/badge/model-charles--json-5b2a8e)](#classifier--fast-n-label-triage-v125)
+
+Fire-and-forget N-label classification over arbitrary context — text,
+documents (paths / bytes / tuples), and free-form side arrays. The
+constructor returns immediately and runs a background pipeline:
+
+1. **Phase 1 (Haiku, ~7s)** — fast verdict on email text + filenames.
+   Fires in parallel with VLM extraction so `.preview` lands as soon
+   as Haiku responds, not after the documents finish extracting.
+2. **Phase 2 (Sonnet via `charles-json`, ~18s)** — strict verdict on
+   the full VLM-fused context with evidence and flippers.
+3. **Guaranteed answer within `timeout` (default 30s)** — if Phase 2
+   doesn't finish in time or produces unparseable JSON, the Phase 1
+   preview is promoted to `.label` and marked `.tentative=True`.
+   Never hangs, never raises.
+
+```python
+from monceai import Classifier
+
+clf = Classifier(
+    labels=["order", "quote", "informative"],
+    rules="order=pipeline-ready PO/BL/invoice; "
+          "quote=needs human estimator; "
+          "informative=everything else",
+    documents=["po_attached.pdf", ("drawing.png", png_bytes)],
+    text="Merci de me chiffrer l'intercalaire pour du 44.2 rTherm",
+    factory_id=4,
+    timeout=30,     # hard cap, verdict guaranteed by then
+)
+
+clf.preview        # {'label': 'quote', 'confidence': 0.95, ...}  ~7s
+clf.label          # 'quote'  (blocks up to 30s for the Sonnet verdict)
+clf.confidence     # 0.95
+clf.evidence       # ["'me chiffrer' explicit quote request", ...]
+clf.flippers       # ["if PO number visible in drawing → flip to order"]
+clf.runner_up      # 'informative'
+clf.pipeline_ready # False  (needs human)
+clf.tentative      # False  (True if Phase 2 fell back to preview)
+clf.elapsed_ms     # 17234
+```
+
+### Progressive getters
+
+| getter | blocks until | typical latency |
+|---|---|---|
+| `.preview` / `.fast` | Phase 1 done | 3-10s |
+| `.ready_fast` / `.ready` | non-blocking poll | 0ms |
+| `.label` / `.confidence` / `.evidence` / ... | Phase 2 done (or timeout→fallback) | ≤30s |
+| `.wait(timeout=...)` | explicit block | user-controlled |
+
+Show the preview to a human operator instantly, then upgrade the card
+when the strict verdict lands:
+
+```python
+clf = Classifier(labels=[...], rules="...", documents=[...], text=...)
+render_pending(clf.preview)       # instant UI
+render_final(clf.to_dict())       # upgrade with evidence once ready
+```
+
+### Batch rollups
+
+```python
+verdicts = Classifier.batch(
+    jobs=[{"documents": [p], "text": body} for p, body in pairs],
+    labels=["order", "quote", "informative"],
+    rules=RULES,
+    factory_id=4,
+    timeout=30,
+    parallel=3,                   # concurrent classifications
+)
+```
+
+### Benchmark — HEF 10-sample triage (Apr 2026)
+
+Sequential, one classifier at a time, mixed Order / Extraction images
+paired with realistic French email bodies:
+
+| metric | value |
+|---|---|
+| accuracy | **10 / 10** (EXCELLENT) |
+| avg confidence | 87.4% |
+| avg Phase 1 latency | 7.0s |
+| avg Phase 2 latency | 17.6s |
+| wall time (sequential) | 175.9s (~18s / sample) |
+| tentative verdicts | 4 / 10 (recovered by Phase 1 fallback) |
+
+The four tentative verdicts are the mechanism paying out: Phase 2
+returned unparseable text on those samples and the Phase 1 preview —
+already correct — was promoted automatically. Without the fallback
+they would have been `"informative" / 0%` defaults.
+
+### Why `charles-json` on both phases
+
+Raw Bedrock Sonnet ignores strict-JSON instructions under
+rules-heavy prompts and produces mixed prose + JSON that fails
+`json.loads`. `charles-json` enforces strict-JSON server-side.
+Swapping `haiku`/`sonnet` → `charles-json` on the same 10-sample
+benchmark took accuracy from **6/10 MEH → 10/10 EXCELLENT** and
+cut wall time from 246s → 176s. Override via `fast_model=` /
+`deep_model=` kwargs if you need a different routing.
+
+### Constructor — simple, every field optional except `labels`
+
+```python
+Classifier(
+    labels,                      # list[str] — the N mutually-exclusive classes
+    rules="",                    # free-form natural-language rules
+    documents=None,              # paths | bytes | (filename, bytes) tuples
+    text=None,                   # email body, message, any free-form text
+    factory_id=0,                # factory scope for Monce context
+    timeout=30,                  # hard cap on .label blocking
+    fast_timeout=12,             # cap on Phase 1
+    extract_timeout=8,           # per-document VLM cap
+    extras=None,                 # dict of arbitrary side arrays → [BLOCKS]
+    parallel=4,                  # in-Classifier document extraction workers
+    fast_model="charles-json",
+    deep_model="charles-json",
+)
+```
 
 ---
 

@@ -15,6 +15,7 @@ Free (no API key):
     Extraction — Memory-augmented file extraction. v1.2.0
     Document   — File + prompt → answer. Wraps Charles/Concierge/Json.
     Outlook    — Email / Outlook workflow (extract + recall + remember). v1.2.0
+    Classifier — Fast N-label triage on docs + text. .preview early, .label ≤30s.
 
 API key required (SNAKE_API_KEY / SAT_API_KEY):
     Snake   — SAT-based explainable classifier (algorithmeai-snake).
@@ -23,7 +24,7 @@ API key required (SNAKE_API_KEY / SAT_API_KEY):
     generate_report — Build HTML/PDF reports from model results.
 """
 
-__version__ = "1.2.4"
+__version__ = "1.2.5"
 
 from .snake import Snake
 from .sat import SAT, SATSession, SATResult, SATProof
@@ -50,3 +51,4 @@ from .synthax import Synthax, SynthaxJob, Stage
 from .google import Google
 from .compute import Computation
 from .mlclass import ML
+from .classifier import Classifier
